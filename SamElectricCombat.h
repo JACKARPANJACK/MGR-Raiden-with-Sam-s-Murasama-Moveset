@@ -26,6 +26,8 @@ class SamElectricCombat
         int hp = -1;
         bool grapple = false;
         cEspControler visual;
+        ~Victim()
+        { reinterpret_cast<void(__thiscall*)(cEspControler*)>(shared::base+0xAAA9B0)(&visual); }
     };
     std::vector<std::unique_ptr<Victim>> victims;
     std::mt19937 random{std::random_device{}()};

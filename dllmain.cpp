@@ -59,6 +59,7 @@ int gui::SelectedWeapon() { return WeaponSwitcher::Get().Selected(); }
 int gui::PendingWeapon() { return WeaponSwitcher::Get().Pending(); }
 void gui::SelectWeapon(int index) { WeaponSwitcher::Get().Select(index); }
 int gui::SelectedKunai() { return KunaiSubweapon::Get().Pending()<0 ? KunaiSubweapon::Get().Selected() : KunaiSubweapon::Get().Pending(); }
+void gui::GetKunaiAimView(gui::KunaiAimView& out) { KunaiSubweapon::Get().AimView(out); }
 void gui::SelectKunai(int index) { KunaiSubweapon::Get().Select(index); }
 static Behavior* __cdecl ReleaseKunai(Entity* owner, void* descriptor)
 { return KunaiSubweapon::Get().Release(owner,descriptor); }
@@ -149,6 +150,8 @@ static void __fastcall ShutdownExtendedPlayer(Pl0000* player, void*)
     SamMovesetManager::Instance().ForgetPlayer(player);
     oPlayerShutdown(player);
     SamNativeRuntime::Get().Destroyed(player);
+    if (!g_Scene.m_pPlayer || g_Scene.m_pPlayer == player)
+        SamResourceManager::Instance().SceneReleased();
 }
 
 typedef void(__thiscall* Pl0000_HandleActions_t)(Pl0000* pThis);
@@ -183,6 +186,7 @@ static bool IsMovesetPlayer(Behavior* behavior)
 {
     return behavior && SamMovesetManager::Instance().IsEnabled() &&
         !SamMovesetManager::Instance().IsSubweaponActive() &&
+        !SamMovesetManager::StoryEvent() && SamNativeRuntime::Get().Active(g_Scene.m_pPlayer) &&
         behavior == reinterpret_cast<Behavior*>(g_Scene.m_pPlayer);
 }
 
@@ -362,6 +366,7 @@ static void __cdecl CustomTickGame()
         if (player && reinterpret_cast<uintptr_t>(player) >= 0x10000 &&
             player->m_pEntity && reinterpret_cast<uintptr_t>(player->m_pEntity) >= 0x10000)
         {
+            SamMovesetManager::Instance().UpdateSceneSafety(player);
             WeaponSwitcher::Get().Tick(player);
             KunaiSubweapon::Get().Tick(player);
             SamMovesetManager::Instance().OnTick(player);
@@ -374,7 +379,7 @@ static void __cdecl CustomTickGame()
     {
         if (g_origTickGame) g_origTickGame();
     }
-    __finally { WeaponSwitcher::Get().RestoreInputs(); }
+    __finally { KunaiSubweapon::Get().RestoreInputs(); WeaponSwitcher::Get().RestoreInputs(); }
     __try
     {
         auto* player = g_Scene.m_pPlayer;
@@ -391,6 +396,12 @@ static void __cdecl CustomTickGame()
 static void InitHooks()
 {
     WeaponSlowMotionFix::Install();
+    static SafeHook::Hook knifeDefinition((void*)(shared::base+0x54DFD0),
+        (void*)NativeKnifeInventory::LookupDefinition,true,(void**)&NativeKnifeInventory::originalDefinition);
+    static SafeHook::Hook knifeAlias((void*)(shared::base+0x77F840),
+        (void*)NativeKnifeInventory::EquippedAlias,true,(void**)&NativeKnifeInventory::originalEquippedAlias);
+    static SafeHook::Hook knifeDefinitionById((void*)(shared::base+0x54DF20),
+        (void*)NativeKnifeInventory::LookupDefinitionById,true,(void**)&NativeKnifeInventory::originalDefinitionById);
     // Native 7A4410 grenade throw release, after its ammo consumption and aim.
     if(KunaiSubweapon::Get().Install()) injector::MakeCALL(shared::base+0x7A4883,ReleaseKunai);
     // Hard reset the opt-in state

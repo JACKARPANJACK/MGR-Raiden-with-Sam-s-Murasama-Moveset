@@ -12,6 +12,11 @@ namespace WeaponSlowMotionFix
     inline constexpr unsigned Sites[]={0x7871BF,0x787208,0x78731D,0x78736E,0x787491,0x7874E2,0x7875FF,0x787650};
     inline bool Install()
     {
+        const auto* optionalCall = reinterpret_cast<const unsigned char*>(shared::base+0x7E91F8);
+        int displacement=0;
+        std::memcpy(&displacement,optionalCall+1,4);
+        if(optionalCall[0]!=0xE8 || reinterpret_cast<uintptr_t>(optionalCall+5)+displacement!=shared::base+0x68C5F0)
+            return false;
         // Validate every instruction before changing any site. Each original
         // six-byte MOV is followed by TEST of the destination and a native skip.
         for(unsigned rva:Sites)
@@ -25,6 +30,8 @@ namespace WeaponSlowMotionFix
             injector::MakeCALL(shared::base+rva,rva==0x787208?WeaponBehaviorLoad::LoadESI:WeaponBehaviorLoad::LoadEDI);
             injector::WriteMemory<unsigned char>(shared::base+rva+5,0x90,true);
         }
+        WeaponBehaviorLoad::NativeAttachTarget=static_cast<unsigned>(shared::base+0x68C5F0);
+        injector::MakeCALL(shared::base+0x7E91F8,WeaponBehaviorLoad::AttachOptional);
         return true;
     }
 }

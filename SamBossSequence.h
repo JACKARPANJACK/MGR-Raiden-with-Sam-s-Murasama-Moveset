@@ -92,7 +92,7 @@ namespace SamBossSequence
         }
         return out;
     }
-    inline std::vector<uint8_t> Adapt(const void* data, size_t available, const char* code = nullptr)
+    inline std::vector<uint8_t> Adapt(const void* data, size_t available, const char* code = nullptr, bool raiden = false)
     {
         if (!data || available < 16) return {};
         size_t size = Size(data);
@@ -137,7 +137,10 @@ namespace SamBossSequence
                         W16(out.data() + pairStart + (index + a) * 4 + 2, zero);
             }
             const bool effect = !std::strcmp(tag,"EffectTrack");
-            if (!attack && !effect) continue;
+            // Raiden's own hit numbers, layer gates, audio and effects remain
+            // native. Flags belonging to his action graph are excluded above
+            // because the addon owns its duration and state transitions.
+            if (raiden || (!attack && !effect)) continue;
             for (unsigned c = first; c < first + children; ++c)
             {
                 const uint8_t* child = src + 16 + c * 8;

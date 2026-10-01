@@ -7,7 +7,8 @@
 int main()
 {
     using namespace WeaponSwitchPolicy;
-    assert(Cycle(0,-1)==Unarmed && Cycle(Unarmed,1)==Sword);
+    assert(Cycle(0,-1)==Heatblades && Cycle(Heatblades,1)==Sword);
+    assert(Weapons[Heatblades].projectile && Weapons[Heatblades].object==0x30372 && Weapons[Heatblades].equipped==0);
     assert(Weapons[Unarmed].unarmed && Weapons[Unarmed].object==0x32040 && Weapons[Unarmed].equipped==5);
     assert(SwordState(Unarmed)==1 && SwordState(Sword)==0 && SwordState(Murasama)==0);
     for(const char* name:{"wp2040.wmb","wp2040.eff","wp2040.bnk","pl0010_2c00.mot","pl0010_2c00_0_seq.bxm"})
@@ -50,8 +51,8 @@ int main()
     assert(WheelSteps(60,remainder)==0 && remainder==60);
     assert(WheelSteps(60,remainder)==-1 && remainder==0);
     assert(WheelSteps(-360,remainder)==3 && remainder==0);
-    assert(Cycle(Sword,WheelSteps(120,remainder))==Unarmed);
-    assert(Cycle(Unarmed,WheelSteps(-120,remainder))==Sword);
+    assert(Cycle(Sword,WheelSteps(120,remainder))==Heatblades);
+    assert(Cycle(Heatblades,WheelSteps(-120,remainder))==Sword);
     assert(Recovery(0x10000F,6,false) && !Recovery(0x10000F,6.1f,false));
     assert(!Recovery(0x100015,3,false) && !Recovery(0x100016,3,false));
     assert(!Recovery(0x10000F,0,true) && !Recovery(0x10000F,-1,false));
@@ -89,5 +90,5 @@ int main()
     }
     assert(checked>40);
     assert(sharedChecked==7);
-    std::cout<<"PASS: six weapons, Q/E and D-pad selection, Sam enable/disable presets, switch guards, "<<checked-sharedChecked<<" DLC pairs and "<<sharedChecked<<" verified native shared execution motions with Sam sequences\n";
+    std::cout<<"PASS: seven weapons including projectile-only heatblades, Q/E and D-pad selection, Sam enable/disable presets, switch guards, "<<checked-sharedChecked<<" DLC pairs and "<<sharedChecked<<" verified native shared execution motions with Sam sequences\n";
 }

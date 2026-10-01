@@ -27,6 +27,7 @@ class SamNativeRuntime
         std::unique_ptr<BattleParameterImplement> samParameters;
         float runSpeed = 1.0f;
         bool addonDamage = false;
+        bool raidenDamage = false;
         unsigned hitBoxes = 1;
         uintptr_t raidenStates[3]{};
         uintptr_t samStates[3]{};
@@ -48,6 +49,12 @@ class SamNativeRuntime
 
     static void NativeEffect(Pl0000* player, int number, cEspControler* controller, uintptr_t callback)
     {
+        const auto record=Get().records.find(player);
+        if (record!=Get().records.end() && record->second->raidenDamage)
+        {
+            reinterpret_cast<void(__thiscall*)(Pl0000*,int,cEspControler*)>(shared::base+callback)(player,number,controller);
+            return;
+        }
         number = SamVisualEffects::ChargeNumber(number);
         const int bank = SamVisualEffects::Bank(number);
         // Keep the native descriptor, both weapon parents and the distinct
@@ -69,9 +76,24 @@ class SamNativeRuntime
     {
         NativeEffect(player,number,controller,0x6A5570);
     }
+    static CollisionAttackData* RaidenAttack(Pl0000* player, Record& record, const uint16_t* number)
+    {
+        auto* saved=player->m_pBattleParameterImplement;
+        CollisionAttackData* attack=nullptr;
+        __try
+        {
+            player->m_pBattleParameterImplement=record.raidenParameters;
+            attack=reinterpret_cast<CollisionAttackData*(__thiscall*)(Pl0000*,const uint16_t*)>
+                (record.original[0x130/4])(player,number);
+        }
+        __finally { player->m_pBattleParameterImplement=saved; }
+        return attack;
+    }
     static CollisionAttackData* __fastcall AttackInfo(Pl0000* player, void*, const uint16_t* number)
     {
-        auto* attack = reinterpret_cast<CollisionAttackData*(__thiscall*)(Pl0000*, const uint16_t*)>(
+        const auto found=Get().records.find(player);
+        auto* attack = found!=Get().records.end() && found->second->raidenDamage ?
+            RaidenAttack(player,*found->second,number) : reinterpret_cast<CollisionAttackData*(__thiscall*)(Pl0000*, const uint16_t*)>(
             shared::base + 0x46BC60)(player,number);
         if (!attack || !number || !Get().Active(player) || player->isBladeModeActive() ||
             (!SamUltimatePolicy::Attack(player->m_Rno0) && player->m_Rno0 != SamUltimatePolicy::Action)) return attack;
@@ -257,6 +279,7 @@ public:
         player->m_pBattleParameterImplement = record.raidenParameters;
         player->m_NinjaRunSpeedRate = record.runSpeed;
         record.addonDamage = false;
+        record.raidenDamage = false;
         record.active = false;
 
         if (resetOwnedAction)
@@ -276,10 +299,10 @@ public:
         PlayerEffect(player,nullptr,number,controller);
         return true;
     }
-    void ConfigureDamage(Pl0000* player, bool addon, unsigned boxes = 1)
+    void ConfigureDamage(Pl0000* player, bool addon, unsigned boxes = 1, bool raiden = false)
     {
         auto it = records.find(player);
-        if (it != records.end()) { it->second->addonDamage = addon; it->second->hitBoxes = boxes ? boxes : 1; }
+        if (it != records.end()) { it->second->addonDamage = addon; it->second->raidenDamage = raiden; it->second->hitBoxes = boxes ? boxes : 1; }
     }
 
     void BeforeShutdown(Pl0000* player)
@@ -292,5 +315,16 @@ public:
             it->second->samParameters.reset();
         }
     }
-    void Destroyed(Pl0000* player) { records.erase(player); }
+    void Destroyed(Pl0000* player)
+    {
+        records.erase(player);
+        if (records.empty() && samMap)
+        {
+            // The animation manager owns this map and is shut down on scene
+            // changes. Balance our reference before discarding the cache.
+            if (auto* maps = AnimationMapManagerImplement::get())
+                maps->release(static_cast<eObjID>(0x11400));
+            samMap = nullptr;
+        }
+    }
 };

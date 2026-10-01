@@ -7,6 +7,7 @@
 #include <windows.h>
 #include <atomic>
 #include "injector/injector.hpp"
+#include "KunaiPolicy.h"
 
 
 
@@ -144,15 +145,16 @@ static void RenderSamDebug()
         ImGui::Separator();
 
         ImGui::Text("X / controller B: next ultimate / queue after current ground attack");
-        static const char* weaponNames[]={"Raiden sword","Murasama / Sam moveset","Pole-arm","Sai","Pincer blades","Unarmed"};
+        static const char* weaponNames[]={"Raiden sword","Murasama / Sam moveset","Pole-arm","Sai","Pincer blades","Unarmed","Bladewolf heatblades"};
         int selectedWeapon=gui::PendingWeapon()<0?gui::SelectedWeapon():gui::PendingWeapon();
-        if(ImGui::Combo("Weapon",&selectedWeapon,weaponNames,6)) gui::SelectWeapon(selectedWeapon);
-        ImGui::TextWrapped("Mouse wheel Up / Down, Q / E or D-pad Left / Right: previous / next weapon. Assets preload; Sam attacks can swap in their final 6 recovery frames. Up: Murasama; Down: Raiden sword. G / Select toggles Sam.");
+        if(ImGui::Combo("Weapon",&selectedWeapon,weaponNames,7)) gui::SelectWeapon(selectedWeapon);
+        ImGui::TextWrapped("Mouse wheel Up / Down or Q / E: previous / next melee weapon. D-pad opens the native inventory, including heatblades. Sam attacks can swap in their final 6 recovery frames. G / Select toggles Sam.");
         if(gui::PendingWeapon()>=0) ImGui::Text("Weapon switch queued...");
-        static const char* kunaiNames[]={"Native inventory subweapon","Stun kunai","Explosive kunai","Heat-blade kunai"};
+        static const char* kunaiNames[]={"Native inventory subweapon","Stun kunai","Explosive kunai","Heat-blade kunai","Bladewolf heatblades"};
         int selectedKunai=gui::SelectedKunai();
-        if(ImGui::Combo("Subweapon",&selectedKunai,kunaiNames,4)) gui::SelectKunai(selectedKunai);
-        ImGui::TextWrapped("F7 / F8: previous / next kunai type. Uses grenade ammo and your normal subweapon aim/throw controls. Native inventory restores the previous grenade/RPG selection.");
+        if(ImGui::Combo("Subweapon",&selectedKunai,kunaiNames,5)) gui::SelectKunai(selectedKunai);
+        ImGui::TextWrapped("Hold C / subweapon to precision aim. Tap: selected payload. Release after 0.3s: stun; 0.75s: explosive. Full charge at 1.5s automatically fires up to ten knives in a 90-degree fan, then cooldown. Release C before charging again. Mouse / right stick aims. Air, Blade Mode and combo throws consume one native knife per projectile.");
+        ImGui::TextWrapped("F7 / F8 chooses the tap payload. Every kunai mode uses native knife inventory; normal grenades and RPGs keep their native controls. Cutscenes/QTEs cancel a held charge.");
         ImGui::TextWrapped("Runtime repair: Sam damage table, 20% faster attacks/Ninja Run, nearby-enemy targeting, timed grab impacts and bounded Round Trip hits.");
         ImGui::TextWrapped("F: Sam sweeping finisher on nearby cyborgs below 25% HP. Native executions, Zandatsu and Blade Mode charge use Sam's DLC controller. Regular hits: 12% electric stun; heavy hits: 25%, with a cooldown.");
         ImGui::Text("Next: %s%s", state.nextUltimate, state.ultimateQueued ? " (QUEUED)" : "");
@@ -165,9 +167,9 @@ static void RenderSamDebug()
         ImGui::TextWrapped("Flick + Light: forward rapid slashes, back grab, left sweep, right tackle. Flick + Heavy: forward JCE, back Round Trip, left sonic slash, right leap.");
         ImGui::TextWrapped("Hold direction + Light: forward rapid slashes, back finisher, left sweep, right leap. Hold direction + Heavy: forward charged slash, back stone burst, left sonic slash, right Round Trip.");
         static const char* s_moveNames[] = {
-            "Raiden thunder slice (3016 -> 3017)",
-            "Raiden lightning storm (3500 -> 3506)",
-            "Raiden lightning draw slash (3010 -> 3017)"
+            "Raiden thunder slice (pl0010 2400)",
+            "Raiden lightning storm (pl0010 3501)",
+            "Raiden lightning draw slash (pl0010 2420 -> 2422)"
         };
         static int s_selectedMove = 0;
         if (ImGui::Combo("Select Move", &s_selectedMove, s_moveNames, 3))
@@ -337,6 +339,35 @@ void gui::OnEndScene()
     ImGui_ImplWin32_NewFrame();
     ImGui::NewFrame();
     RenderSamDebug();
+    gui::KunaiAimView aim{};
+    gui::GetKunaiAimView(aim);
+    if((aim.active || aim.recovery) && !gui::IsMenuVisible())
+    {
+        const auto size=ImGui::GetIO().DisplaySize;
+        const ImVec2 center(size.x*KunaiPolicy::ReticleX,size.y*KunaiPolicy::ReticleY);
+        auto* draw=ImGui::GetForegroundDrawList();
+        const auto plan=KunaiPolicy::Plan(aim.frames,aim.variant,aim.ammo,KunaiPolicy::MaxShots);
+        const ImU32 color=aim.ammo==0 || aim.recovery ? IM_COL32(255,90,80,230) : aim.targets ?
+            IM_COL32(80,255,180,235) : IM_COL32(230,240,255,220);
+        if(aim.active) draw->AddCircle(center,12,color,32,1.5f);
+        for(int axis=0;aim.active && axis<4;++axis)
+        {
+            const float dx=axis==0?1.0f:axis==1?-1.0f:0;
+            const float dy=axis==2?1.0f:axis==3?-1.0f:0;
+            draw->AddLine(ImVec2(center.x+dx*17,center.y+dy*17),ImVec2(center.x+dx*24,center.y+dy*24),color,1.5f);
+        }
+        const float progress=aim.recovery ? 1-float(aim.recovery)/float(KunaiPolicy::BurstCooldown) :
+            float(aim.frames)/float(KunaiPolicy::VolleyCharge);
+        draw->AddRectFilled(ImVec2(center.x-45,center.y+34),ImVec2(center.x+45,center.y+38),IM_COL32(20,30,40,190));
+        draw->AddRectFilled(ImVec2(center.x-45,center.y+34),ImVec2(center.x-45+90*progress,center.y+38),color);
+        const char* mode=aim.frames>=KunaiPolicy::VolleyCharge ? "TEN-KNIFE FAN" :
+            plan.variant==KunaiPolicy::Explosive ? "EXPLOSIVE" : plan.variant==KunaiPolicy::Stun ? "STUN" : "HEAT KNIFE";
+        char label[96]{};
+        if(aim.recovery) std::snprintf(label,sizeof(label),"KNIFE COOLDOWN %.1fs | knives %u",float(aim.recovery)/60,aim.ammo);
+        else std::snprintf(label,sizeof(label),"%s | knives %u | targets %u",mode,aim.ammo,aim.targets);
+        const auto textSize=ImGui::CalcTextSize(label);
+        draw->AddText(ImVec2(center.x-textSize.x*0.5f,center.y+44),color,label);
+    }
     ImGui::EndFrame();
     ImGui::Render();
     ImGui_ImplDX9_RenderDrawData(ImGui::GetDrawData());

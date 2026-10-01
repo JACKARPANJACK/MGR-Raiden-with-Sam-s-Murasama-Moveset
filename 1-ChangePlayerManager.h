@@ -111,45 +111,11 @@ public:
 
 	void ChangeModelID()
 	{
-		std::lock_guard lock(m_mutex);
-		bool isSam = g_GameStateManager.IsMainSamPlayer;
-
-		// Update constraint indices: sheath (0x710 for Sam hip, 0x711 for Raiden back)
-		injector::WriteMemory<DWORD>(BASE_ADDR + 0x007BD7CE + 1, isSam ? 0x710 : 0x711, true);
-		injector::WriteMemory<DWORD>(BASE_ADDR + 0x007BD968 + 1, 0x700, true);
-
-		// Default Raiden sword models: 10001 (blade), 10005 (core?), 10004 (sheath)
-		// Sam sword models: 11401 (blade), 11405 (core?), 11404 (sheath)
-		uint32_t activeModelIds[3] = {
-			isSam ? 0x11401u : 0x10001u,
-			isSam ? 0x11405u : 0x10005u,
-			isSam ? 0x11404u : 0x10004u
-		};
-
-		static const ModelAddress modelOffsets[MODEL_COUNT] =
-		{
-			{{0x14A982C, 0x14A9838, 0x14A9834}},
-			{{0x14A9840, 0x14A984C, 0x14A9848}},
-			{{0x14A9854, 0x14A9860, 0x14A985C}},
-			{{0x14A9868, 0x14A9874, 0x14A9870}},
-			{{0x14A987C, 0x14A9888, 0x14A9884}},
-			{{0x14A9890, 0x14A989C, 0x14A9898}},
-			{{0x14A98A8, 0x14A98B0, 0x14A98AC}},
-			{{0x14A98B8, 0x14A98C4, 0x14A98C0}},
-			{{0x14A98CC, 0x14A98D8, 0x14A98D4}},
-			{{0x14A98E0, 0x14A98EC, 0x14A98E8}},
-			{{0x14A98F4, 0x14A9900, 0x14A98FC}},
-			{{0x14A9908, 0x14A9914, 0x14A9910}},
-			{{0x14A991C, 0x14A9920, 0x14A9924}},
-			{{0x14A9930, 0x14A993C, 0x14A9938}}
-		};
-
-		for (uint32_t i = 0; i < MODEL_COUNT; i++)
-			for (uint32_t j = 0; j < MODEL_ID_COUNT; j++)
-				injector::WriteMemory(BASE_ADDR + modelOffsets[i].offsets[j], activeModelIds[j], true);
-
-		// Do not change the global ID to Sam's (0x11012) so the HUD stays blue!
-		injector::WriteMemory(BASE_ADDR + 0x14A99D4, 0x00010012, true);
+		// Costume rows contain body, hair, visor, sheath and face IDs, not a
+		// shared blade/core/sheath tuple. Mutating them made scene reloads ask
+		// for nonexistent pl0001/pl0004 archives and dereference a null sword.
+		// Keep native scene construction intact; live sheath placement is owned
+		// by SheathController and Sam's combat graph remains per-player.
 	}
 
 private:

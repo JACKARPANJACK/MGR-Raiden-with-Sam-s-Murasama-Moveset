@@ -2,12 +2,13 @@
 #include <cstdint>
 namespace WeaponSwitchPolicy
 {
-    struct Weapon { const char* name; unsigned object; int equipped; bool unarmed; bool sam; };
-    constexpr int Sword=0, Murasama=1, Unarmed=5;
+    struct Weapon { const char* name; unsigned object; int equipped; bool unarmed; bool sam; bool projectile=false; };
+    constexpr int Sword=0, Murasama=1, Unarmed=5, Heatblades=6;
     inline constexpr Weapon Weapons[] = {
         {"Raiden sword",0,0,false,false}, {"Murasama / Sam moveset",0,0,false,true},
         {"Pole-arm",0x32000,2,false,false}, {"Sai",0x32030,3,false,false},
-        {"Pincer blades",0x32020,4,false,false}, {"Unarmed",0x32040,5,true,false}
+        {"Pincer blades",0x32020,4,false,false}, {"Unarmed",0x32040,5,true,false},
+        {"Bladewolf heatblades",0x30372,0,false,false,true}
     };
     constexpr int Count=sizeof(Weapons)/sizeof(Weapons[0]);
     // Native prologue/unarmed state 1; state 2 is the sword-lost path.

@@ -15,7 +15,7 @@ namespace SamTargets
         case 0x20040: case 0x20060: case 0x20070: case 0x20071: case 0x20080:
         case 0x20081: case 0x20091: case 0x200A0: case 0x200A1: case 0x20100:
         case 0x20110: case 0x20120: case 0x20121: case 0x20130: case 0x20190:
-        case 0x201A0: case 0x20310: case 0x20700: return true;
+        case 0x201A0: case 0x20220: case 0x20221: case 0x20310: case 0x20700: return true;
         default: return false;
         }
     }

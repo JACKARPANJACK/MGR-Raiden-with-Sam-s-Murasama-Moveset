@@ -18,10 +18,17 @@ private:
     Hw::cFmerge m_pl1400Fmerge;
     Hw::cFmerge m_pl1404Fmerge;
     Hw::cFmerge m_em0020Fmerge;
+    Hw::cFmerge m_wolfFmerge;
+    Hw::cFmerge m_heatbladeFmerge;
+    Hw::cFmerge m_raidenFmerge;
+    Hw::cFmerge m_grenadeFmerge;
+    bool m_grenadeBank=false;
+    bool m_samBank = false, m_bossBank = false, m_wolfBank = false, m_heatbladeBank = false;
     struct RequestState { unsigned int id; bool requested; bool pinned; };
-    RequestState m_requests[5] = {
+    RequestState m_requests[9] = {
         {0x11400, false, false}, {0x11403, false, false},
-        {0x11404, false, false}, {0x20020, false, false}, {0x3C001, false, false}
+        {0x11404, false, false}, {0x20020, false, false}, {0x3C001, false, false},
+        {0x20220, false, false}, {0x30372, false, false}, {0x10010, false, false}, {0x31011,false,false}
     };
     bool m_isLoaded = false;
     bool m_effectsRegistered = false;
@@ -30,6 +37,16 @@ private:
     std::vector<uint8_t> m_chargeRecoverySequence;
 
     SamResourceManager() = default;
+
+    static bool RegisterBank(unsigned id, Hw::cFmerge& archive)
+    {
+        if (!g_ObjReadManager.isObjectLoaded(static_cast<eObjID>(id), 0) ||
+            !g_ObjReadManager.getDataAtSet(archive, static_cast<eObjID>(id), 0)) return false;
+        // Native EFF/EFT registration: extension lookup, bank alias resolution
+        // and duplicate/resource checks are all handled by the engine.
+        using Register = BOOL(__cdecl*)(unsigned, Hw::cFmerge*);
+        return reinterpret_cast<Register>(shared::base + 0xA00C50)(id, &archive) != FALSE;
+    }
 
 
 public:
@@ -64,8 +81,8 @@ public:
         // 2. Request all Sam object IDs from the engine CPK archive
         __try
         {
-            // Requests are retained for process lifetime: animation slots may
-            // still reference these archives after G switches off.
+            // Retain requests through G toggles and story suspension. They are
+            // balanced only after the native player has finished shutdown.
             bool accepted = true;
             for (auto& resource : m_requests)
             {
@@ -101,10 +118,17 @@ public:
 
             if (m_isLoaded)
             {
+                if (!m_samBank) m_samBank = RegisterBank(0x11400, m_pl1400Fmerge);
+                if (!m_bossBank) m_bossBank = RegisterBank(0x20020, m_em0020Fmerge);
+                if (!m_wolfBank) m_wolfBank = RegisterBank(0x20220, m_wolfFmerge);
+                if (!m_heatbladeBank) m_heatbladeBank = RegisterBank(0x30372, m_heatbladeFmerge);
+                if (!m_grenadeBank) m_grenadeBank = RegisterBank(0x31011,m_grenadeFmerge);
                 if (g_ObjReadManager.isObjectLoaded(static_cast<eObjID>(0x20020), 0))
                     g_ObjReadManager.getDataAtSet(m_em0020Fmerge, static_cast<eObjID>(0x20020), 0);
                 if (g_ObjReadManager.isObjectLoaded(static_cast<eObjID>(0x11404), 0))
                     g_ObjReadManager.getDataAtSet(m_pl1404Fmerge, static_cast<eObjID>(0x11404), 0);
+                if (g_ObjReadManager.isObjectLoaded(static_cast<eObjID>(0x10010), 0))
+                    g_ObjReadManager.getDataAtSet(m_raidenFmerge, static_cast<eObjID>(0x10010), 0);
 
                 RegisterEffectsAndSound();
 
@@ -126,9 +150,10 @@ public:
     {
         if (m_effectsRegistered)
             return true;
-        if (!m_isLoaded) return false;
+        if (!m_isLoaded || !m_samBank) return false;
         for (const auto& resource : m_requests)
-            if (!resource.requested || !g_ObjReadManager.isObjectLoaded(static_cast<eObjID>(resource.id), 0))
+            if (resource.id == 0x11400 && (!resource.requested ||
+                !g_ObjReadManager.isObjectLoaded(static_cast<eObjID>(resource.id), 0)))
                 return false;
 
         __try
@@ -142,6 +167,14 @@ public:
             if (pDlcMode)
             {
                 const int originalMode = *pDlcMode;
+                // Native DLC initialization also selects DLC sound, collision-
+                // effect and effect-bullet tables globally. Restoring only DLC
+                // mode left bosses, enemies and cutscenes using Sam's tables.
+                // Register the DLC layer, then restore the scene's selectors.
+                constexpr unsigned selectors[]={0x1778858,0x17781B8,0x19BD180,0x19BD184,
+                    0x148F5DC,0x148F5E0,0x148F5E4};
+                unsigned saved[7]{};
+                for (unsigned i=0;i<7;++i) saved[i]=*reinterpret_cast<unsigned*>(shared::base+selectors[i]);
                 __try
                 {
                     *pDlcMode = 8;
@@ -152,6 +185,8 @@ public:
                 __finally
                 {
                     *pDlcMode = originalMode;
+                    for (unsigned i=0;i<7;++i)
+                        *reinterpret_cast<unsigned*>(shared::base+selectors[i])=saved[i];
                 }
                 return true;
             }
@@ -186,6 +221,24 @@ public:
         return clip;
     }
 
+    SamArchiveLookup::Clip GetRaidenClip(const char* code)
+    {
+        if (!m_isLoaded || !SamArchiveLookup::ValidCode(code) ||
+            !g_ObjReadManager.isObjectLoaded(static_cast<eObjID>(0x10010),0)) return {};
+        char filename[64]{};
+        std::snprintf(filename,sizeof(filename),"pl0010_%s.mot",code);
+        void* motion=m_raidenFmerge.getFileNameData(filename);
+        std::snprintf(filename,sizeof(filename),"pl0010_%s_0_seq.bxm",code);
+        void* sequence=m_raidenFmerge.getFileNameData(filename);
+        return motion && sequence ? SamArchiveLookup::Clip{motion,sequence} : SamArchiveLookup::Clip{};
+    }
+    size_t GetRaidenSequenceSize(void* data)
+    {
+        if (!data || !m_isLoaded) return 0;
+        for (size_t i=0;i<m_raidenFmerge.getFileAmount();++i)
+            if (m_raidenFmerge.getFileIndexData(i)==data) return m_raidenFmerge.getFileIndexSize(i);
+        return 0;
+    }
     void* GetMotion(const char* code) { return GetClip(code).motion; }
     void* GetSequence(const char* code) { return GetClip(code).sequence; }
 
@@ -256,6 +309,31 @@ public:
     }
 
     bool IsLoaded() const { return m_isLoaded; }
+    bool HeatbladesReady() const { return m_wolfBank && m_heatbladeBank; }
+    bool ExplosivesReady() const { return m_grenadeBank; }
+    void SceneReleased()
+    {
+        using ReleaseBank=void(__cdecl*)(unsigned,Hw::cFmerge*);
+        auto release=reinterpret_cast<ReleaseBank>(shared::base+0xA00D60);
+        if (m_samBank) release(0x11400,&m_pl1400Fmerge);
+        if (m_bossBank) release(0x20020,&m_em0020Fmerge);
+        if (m_wolfBank) release(0x20220,&m_wolfFmerge);
+        if (m_heatbladeBank) release(0x30372,&m_heatbladeFmerge);
+        if (m_grenadeBank) release(0x31011,&m_grenadeFmerge);
+        // Player shutdown has completed. Balance only this plugin's requests;
+        // enemies and effect work retain their own native references.
+        for (auto& resource : m_requests)
+        {
+            if (resource.pinned) g_ObjReadManager.removeReference(static_cast<eObjID>(resource.id),0);
+            if (resource.requested) g_ObjReadManager.removeRequest(static_cast<eObjID>(resource.id),0);
+            resource.requested = resource.pinned = false;
+        }
+        m_isLoaded = m_effectsRegistered = m_requestIssued = false;
+        m_samBank = m_bossBank = m_wolfBank = m_heatbladeBank = false;
+        m_grenadeBank=false;
+        // Sequence copies are immutable and may still be bound during cleanup.
+        // Reacquire archive pointers from the next scene before using them.
+    }
     bool IsRuntimeReady()
     {
         if (!m_isLoaded) return false;

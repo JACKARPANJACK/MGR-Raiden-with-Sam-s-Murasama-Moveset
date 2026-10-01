@@ -67,7 +67,9 @@
     <ClInclude Include="pch.h" />
     <ClInclude Include="gui.h" />
     <ClInclude Include="KunaiPolicy.h" />
+    <ClInclude Include="EncounterPolicy.h" />
     <ClInclude Include="KunaiSubweapon.h" />
+    <ClInclude Include="NativeKnifeInventory.h" />
     <ClInclude Include="WeaponSlowMotionFix.h" />
     <ClInclude Include="WeaponBehaviorLoad.h" />
     <ClInclude Include="third_party\imgui\imconfig.h" />

@@ -7,7 +7,7 @@ namespace SamUltimatePolicy
     { return ((on|trig)&ControllerButton)!=0 && (previous&ControllerButton)==0; }
     // Unused/default case in both native Sam input and action dispatch tables.
     constexpr uint32_t Action = 0x10007Cu;
-    struct Move { const char* name; const char* windup; const char* release; };
+    struct Move { const char* name; const char* windup; const char* release; bool raiden=false; };
     inline constexpr Move Moves[] = {
         {"Boss stone burst", "3020", "3024"},
         {"Boss charged slash", "3000", "3004"},
@@ -17,12 +17,12 @@ namespace SamUltimatePolicy
         {"Boss continuous slash", "2200", "2220"},
         {"Boss sweeping combo", "2600", "2610"},
         {"Boss Judgement Cut", "92e0", "92e4"},
-        {"Raiden thunder slice", "3016", "3017"},
-        {"Raiden lightning storm", "3500", "3506"},
+        {"Raiden thunder slice", nullptr, "2400", true},
+        {"Raiden lightning storm", nullptr, "3501", true},
         {"Boss unarmed grab & smash", "a648", "a649"},
         {"Boss unarmed tackle & smash", "a646", "a648"},
         {"Boss Murasama round trip throw", "3200", "3210"},
-        {"Raiden lightning draw slash", "3010", "3017"},
+        {"Raiden lightning draw slash", "2420", "2422", true},
     };
     constexpr unsigned Count = sizeof(Moves) / sizeof(Moves[0]);
     // Boss attacks belong to directional add-ons. Only Raiden specials use X.

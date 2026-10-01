@@ -7,7 +7,7 @@ p=argparse.ArgumentParser(description=__doc__)
 p.add_argument('game_data',type=Path)
 p.add_argument('--output',type=Path,default=Path('local_assets'))
 a=p.parse_args()
-required={'pl/pl1400.dat','pl/pl1404.dat','em/em0020.dat','core/coreeff.dat','pl/pl0010.dat','wp/wp0372.dat','wp/wp2040.dat'}
+required={'pl/pl1400.dat','pl/pl1404.dat','em/em0020.dat','core/coreeff.dat','pl/pl0010.dat','wp/wp0372.dat','wp/wp1011.dat','wp/wp2040.dat'}
 shared={'8550','8552','8553','8585','8960','8970','8980'}
 found=set()
 for archive in sorted(a.game_data.glob('*.cpk')):
@@ -20,7 +20,9 @@ for archive in sorted(a.game_data.glob('*.cpk')):
             blob=decompress(stream.read(row['size']))
             base=archive.stem+'/'+row['path']+'.unpacked/'
             for name,data in dat_entries(blob):
-                if row['path'].lower()=='pl/pl0010.dat' and name.lower() not in {'pl0010_'+code+'.mot' for code in shared}:
+                raiden_ultimates={'2400','3501','2420','2422','60a1','60a2','2561','2566'}
+                raiden_files={'pl0010_'+code+'.mot' for code in shared|raiden_ultimates} | {'pl0010_'+code+'_0_seq.bxm' for code in raiden_ultimates} | {'pl0010_animationMap.bxm'}
+                if row['path'].lower()=='pl/pl0010.dat' and name.lower() not in raiden_files:
                     continue
                 write_local(a.output,base+name,data)
             found.add(row['path'].lower())

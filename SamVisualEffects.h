@@ -25,7 +25,7 @@ namespace SamVisualEffects
     {
         if (!owner || !anchor) return;
         alignas(16) unsigned char info[0x150]{};
-        const int parent = reinterpret_cast<int(__thiscall*)(Entity*,int)>(shared::base + 0x67C8A0)(anchor,0);
+        const int parent = reinterpret_cast<int(__thiscall*)(Entity*)>(shared::base + 0x67C8A0)(anchor);
         reinterpret_cast<void*(__thiscall*)(void*,int,Behavior*,int)>(shared::base + 0x39A0)(info,number,owner,parent);
         reinterpret_cast<void(__thiscall*)(void*,cEspControler*)>(shared::base + 0x9FFB20)(info,controller);
         reinterpret_cast<void(__thiscall*)(void*,Entity*,int)>(shared::base + 0xA03080)(info,anchor,0);

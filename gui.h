@@ -3,6 +3,8 @@
 
 namespace gui
 {
+    struct KunaiAimView { bool active=false; unsigned frames=0,targets=0,ammo=0,recovery=0; int variant=0; };
+    void GetKunaiAimView(KunaiAimView& out);
     bool IsMenuVisible();
     static constexpr size_t MAX_HISTORY = 32;
 
