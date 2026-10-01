@@ -68,6 +68,8 @@
     <ClInclude Include="gui.h" />
     <ClInclude Include="KunaiPolicy.h" />
     <ClInclude Include="KunaiSubweapon.h" />
+    <ClInclude Include="WeaponSlowMotionFix.h" />
+    <ClInclude Include="WeaponBehaviorLoad.h" />
     <ClInclude Include="third_party\imgui\imconfig.h" />
     <ClInclude Include="third_party\imgui\imgui.h" />
     <ClInclude Include="third_party\imgui\imgui_impl_dx9.h" />

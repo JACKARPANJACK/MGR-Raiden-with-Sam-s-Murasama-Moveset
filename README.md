@@ -11,16 +11,29 @@ motions with their Sam DLC sequences. Scripted story states retain native routin
 - **G**: toggle Sam's sword moveset.
 - **0**: open the menu, including the weapon selector.
 - **Q / E** (also **[ / ]**): select previous / next weapon.
+- **Mouse wheel Up / Down**: previous / next weapon, including Murasama and Unarmed.
 - **D-pad Left / Right**: previous / next weapon.
 - **D-pad Up**: Murasama; **D-pad Down**: Raiden sword.
 - **F7 / F8**: previous / next kunai variant; also selectable in the menu.
 - **F** in Sam mode: sweeping finisher against a nearby weak cyborg.
-- **X** in Sam mode: queue the next lightning ultimate.
+- **X** or **controller B / Circle** in Sam mode: queue the next lightning ultimate.
+- **Select / Back** or **L3 + R3**: toggle Sam's moveset.
 - Directional Light/Heavy and flick inputs add boss attacks; see
   [directional controls](DIRECTIONAL_MOVES.md).
 
 Weapons: Raiden sword, Murasama, Pole-arm, Sai, Pincer blades and Unarmed. Switching waits
 for a safe ground state and waits for streamed weapon assets before equipping.
+Weapon assets preload and stay mounted for the player's lifetime. Mouse-wheel
+notches accumulate, so precise wheels work too; rapid requests select the latest
+weapon without replaying each intermediate swap. Sam's ordinary ground attacks
+allow a swap in their final six recovery frames. Blade Mode, charge holds,
+Round Trip, ultimates, aerial and scripted actions keep their transition guards.
+Menu scrolling stays with the menu. B is reserved for ultimates during Sam combat;
+native QTE/context inputs remain available outside those states.
+Unarmed equips custom weapon ID 5 and mounts `wp2040`, including its native
+unarmed motion/sequence, effect and sound assets. The sword and sheath stay
+attached; switching never calls the sword-lost/drop path. Enemy-contact slow
+motion now skips absent optional weapon objects safely.
 Selecting Murasama enables Sam's moveset; selecting another weapon disables it,
 including a pending Sam activation. Q/E and the D-pad cycle through Murasama as
 a separate choice. Secondary weapons and unarmed combat use Raiden's native

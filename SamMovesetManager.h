@@ -16,6 +16,7 @@
 #include "ChargeController.h"
 #include "SamBossSequence.h"
 #include "SamUltimatePolicy.h"
+#include "gui.h"
 #include "SamDirectionalPolicy.h"
 #include "SamRoundTripPolicy.h"
 #include "SamRockProjectile.h"
@@ -88,6 +89,7 @@ private:
     EntityHandle m_roundTripHandle;
     int m_savedSwordUpdate = 1;
     bool m_xDown = false;
+    unsigned m_previousUltimatePad = 0;
     unsigned m_ultimateStage = 0;
     unsigned m_currentUltimate = 0;
     std::map<std::string, std::vector<uint8_t>> m_bossSequences;
@@ -527,7 +529,7 @@ private:
         g_ChangePlayerHandle.ChangeModelID();
         SheathController::Instance().SetSheathToHip(player, true);
 
-        Log("[SamMoveset] ACTIVATED kunai-subweapon-6: Sam update/context/attack table; light=%d heavy=%d charge=%d speed=1.20 player=%p",
+        Log("[SamMoveset] ACTIVATED smooth-switch-8: Sam update/context/attack table; light=%d heavy=%d charge=%d speed=1.20 player=%p",
             player->m_pBattleParameterImplement->getAttackPowerByNo(4),
             player->m_pBattleParameterImplement->getAttackPowerByNo(12),
             player->m_pBattleParameterImplement->getAttackPowerByNo(26),player);
@@ -659,6 +661,7 @@ public:
         m_comboCount = 0;
         m_lastComboClip[0] = 0;
         m_xDown = (GetAsyncKeyState('X') & 0x8000) != 0;
+        m_previousUltimatePad=g_dbPad.m_On|g_dbPad.m_Trig;
         if (!m_drawThunderstormActive && m_drawSlashStrikeTimer == 0 && !m_stormLifetime)
             StopThunderstorm();
         if (m_activePlayer) SamNativeRuntime::Get().ConfigureDamage(m_activePlayer,false);
@@ -816,7 +819,12 @@ public:
     void UpdateUltimate(Pl0000* player, bool focused)
     {
         const bool down = (GetAsyncKeyState('X') & 0x8000) != 0;
-        const bool pressed = focused && down && !m_xDown;
+        const bool pressed = focused && SamUltimatePolicy::ReserveButton(player->m_Rno0,
+            player->isAlive()!=FALSE,player->isInAir()!=FALSE,
+            Trigger::StpFlags.STP_OBJ||g_StaFlags.STA_QTE||g_StaFlags.STA_EVENT||g_StaFlags.STA_CODEC||g_StaFlags.STA_SOFT_EVENT,
+            player->isBladeModeActive()!=FALSE,m_subweaponActive) && ((down && !m_xDown) ||
+            SamUltimatePolicy::Press(g_dbPad.m_On,g_dbPad.m_Trig,m_previousUltimatePad));
+        m_previousUltimatePad=g_dbPad.m_On|g_dbPad.m_Trig;
         m_xDown = down;
         const bool finisherDown = (GetAsyncKeyState('F') & 0x8000) != 0;
         const bool finisherPressed = focused && finisherDown && !m_finisherDown;
@@ -912,7 +920,7 @@ public:
         if (!m_roundTripActive && pressed && (SamUltimatePolicy::Neutral(action) || SamUltimatePolicy::Attack(action)))
         {
             m_ultimateQueue.Request();
-            Log("[SamMoveset] ULTIMATE queued by X: %s", NextUltimateName());
+            Log("[SamMoveset] ULTIMATE queued by X/controller B: %s", NextUltimateName());
         }
         if (m_roundTripActive || (!m_ultimateQueue.pending && m_pendingAddon < 0)) return;
         const bool finished = g_GameFunctionManager.IsAnimationEnded(player, 0);
@@ -992,8 +1000,9 @@ public:
         s_wasGDown = isGDown;
 
         // Controller toggle: Back / Select (0x0020), or L3 + R3
-        const bool padDown = ((g_dbPad.m_Trig & 0x0020) != 0) ||
-            ((g_dbPad.m_On & 0x0040) && (g_dbPad.m_Trig & 0x0080));
+        static_assert(SamUltimatePolicy::ControllerButton==Hw::PAD_BTN_B && SamUltimatePolicy::SelectButton==Hw::PAD_BTN_SL);
+        const bool padDown = ((g_dbPad.m_Trig & SamUltimatePolicy::SelectButton) != 0) ||
+            ((g_dbPad.m_On & SamUltimatePolicy::LeftStickButton) && (g_dbPad.m_Trig & SamUltimatePolicy::RightStickButton));
         static bool s_wasPadDown = false;
         bool padToggle = padDown && !s_wasPadDown;
         s_wasPadDown = padDown;
@@ -1018,7 +1027,7 @@ public:
 
         if (Trigger::StpFlags.STP_OBJ) return;
         if (m_subweaponActive) return;
-        UpdateUltimate(player, foregroundProcess == GetCurrentProcessId());
+        UpdateUltimate(player, foregroundProcess == GetCurrentProcessId() && !gui::IsMenuVisible());
     }
 
     void PostTick(Pl0000* player)

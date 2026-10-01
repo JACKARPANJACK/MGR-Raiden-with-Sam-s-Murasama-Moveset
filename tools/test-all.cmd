@@ -4,6 +4,8 @@ call "%~dp0vc-env.cmd"
 if errorlevel 1 exit /b 1
 
 echo Runtime timing and damage repair tests...
+cl /nologo /EHsc /std:c++20 /W4 tests\weapon_behavior_tests.cpp /FoRelease\weapon_behavior_tests.obj /FeRelease\weapon_behavior_tests.exe || exit /b 1
+Release\weapon_behavior_tests.exe || exit /b 1
 cl /nologo /EHsc /std:c++20 /W4 tests\kunai_tests.cpp /FoRelease\kunai_tests.obj /FeRelease\kunai_tests.exe || exit /b 1
 Release\kunai_tests.exe || exit /b 1
 cl /nologo /EHsc /std:c++20 /W4 tests\weapon_dlc_tests.cpp /FoRelease\weapon_dlc_tests.obj /FeRelease\weapon_dlc_tests.exe || exit /b 1
@@ -54,5 +56,5 @@ Release\sam_toggle_policy_tests.exe || exit /b 1
 
 echo.
 echo ========================================================
-echo SUCCESS: ALL 13 TEST SUITES PASSED CLEANLY WITH ZERO FAILS!
+echo SUCCESS: ALL 14 TEST SUITES PASSED CLEANLY WITH ZERO FAILS!
 echo ========================================================

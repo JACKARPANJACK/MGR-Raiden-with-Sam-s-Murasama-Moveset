@@ -10,6 +10,18 @@
 int main()
 {
     using namespace SamUltimatePolicy;
+    assert(ControllerButton==0x20 && SelectButton==0x200);
+    assert(!(ControllerButton&SelectButton));
+    assert(Press(ControllerButton,ControllerButton,0));
+    assert(!Press(ControllerButton,ControllerButton,ControllerButton));
+    assert(!Press(SelectButton,SelectButton,0));
+    assert(ReserveButton(0x100000,true,false,false,false,false));
+    assert(ReserveButton(0x10000F,true,false,false,false,false));
+    assert(!ReserveButton(0x100000,true,false,true,false,false));
+    assert(!ReserveButton(0x100000,true,false,false,true,false));
+    assert(!ReserveButton(0x100000,true,false,false,false,true));
+    assert(!ReserveButton(0x100000,true,true,false,false,false));
+    assert(!ReserveButton(0x100007,true,false,false,false,false));
     assert(SamTogglePolicy::OwnsAction(Action));
     assert(CanStart(0x100000, true, false, false));
     assert(!CanStart(0x10000F, true, false, false));

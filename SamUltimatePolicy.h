@@ -2,6 +2,9 @@
 #include <cstdint>
 namespace SamUltimatePolicy
 {
+    constexpr unsigned ControllerButton=0x20, SelectButton=0x200, LeftStickButton=0x1000, RightStickButton=0x8000;
+    inline bool Press(unsigned on,unsigned trig,unsigned previous)
+    { return ((on|trig)&ControllerButton)!=0 && (previous&ControllerButton)==0; }
     // Unused/default case in both native Sam input and action dispatch tables.
     constexpr uint32_t Action = 0x10007Cu;
     struct Move { const char* name; const char* windup; const char* release; };
@@ -34,6 +37,8 @@ namespace SamUltimatePolicy
     {
         return state == 0x100000 || state == 0x100001 || state == 0x100002;
     }
+    inline bool ReserveButton(unsigned state,bool alive,bool airborne,bool blocked,bool blade,bool subweapon)
+    { return alive && !airborne && !blocked && !blade && !subweapon && (Neutral(state)||Attack(state)||state==Action); }
     // Never steal aerial, damage, execution, or scripted states.
     inline bool CanStart(uint32_t state, bool alive, bool airborne, bool finished)
     {

@@ -7,7 +7,7 @@ p=argparse.ArgumentParser(description=__doc__)
 p.add_argument('game_data',type=Path)
 p.add_argument('--output',type=Path,default=Path('local_assets'))
 a=p.parse_args()
-required={'pl/pl1400.dat','pl/pl1404.dat','em/em0020.dat','core/coreeff.dat','pl/pl0010.dat','wp/wp0372.dat'}
+required={'pl/pl1400.dat','pl/pl1404.dat','em/em0020.dat','core/coreeff.dat','pl/pl0010.dat','wp/wp0372.dat','wp/wp2040.dat'}
 shared={'8550','8552','8553','8585','8960','8970','8980'}
 found=set()
 for archive in sorted(a.game_data.glob('*.cpk')):

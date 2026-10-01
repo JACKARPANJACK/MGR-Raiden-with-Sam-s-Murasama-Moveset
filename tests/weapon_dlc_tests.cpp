@@ -8,7 +8,10 @@ int main()
 {
     using namespace WeaponSwitchPolicy;
     assert(Cycle(0,-1)==Unarmed && Cycle(Unarmed,1)==Sword);
-    assert(Weapons[Unarmed].unarmed && Weapons[Unarmed].object==0);
+    assert(Weapons[Unarmed].unarmed && Weapons[Unarmed].object==0x32040 && Weapons[Unarmed].equipped==5);
+    assert(SwordState(Unarmed)==1 && SwordState(Sword)==0 && SwordState(Murasama)==0);
+    for(const char* name:{"wp2040.wmb","wp2040.eff","wp2040.bnk","pl0010_2c00.mot","pl0010_2c00_0_seq.bxm"})
+        assert(std::filesystem::file_size(std::string("local_assets/data000/wp/wp2040.dat.unpacked/")+name)>0);
     assert(Weapons[Murasama].sam && !Weapons[Sword].sam);
     assert(Weapons[2].equipped==2 && Weapons[3].equipped==3 && Weapons[4].equipped==4);
     for(int i=0;i<Count;++i)
@@ -43,6 +46,21 @@ int main()
     assert(!CanSwitch(0,true,false,false,false,true));
     assert(!CanSwitch(0,true,true,false,false,false));
     assert(!CanSwitch(0,false,false,false,false,false));
+    int remainder=0;
+    assert(WheelSteps(60,remainder)==0 && remainder==60);
+    assert(WheelSteps(60,remainder)==-1 && remainder==0);
+    assert(WheelSteps(-360,remainder)==3 && remainder==0);
+    assert(Cycle(Sword,WheelSteps(120,remainder))==Unarmed);
+    assert(Cycle(Unarmed,WheelSteps(-120,remainder))==Sword);
+    assert(Recovery(0x10000F,6,false) && !Recovery(0x10000F,6.1f,false));
+    assert(!Recovery(0x100015,3,false) && !Recovery(0x100016,3,false));
+    assert(!Recovery(0x10000F,0,true) && !Recovery(0x10000F,-1,false));
+    assert(!Recovery(0x47,0,false));
+    assert(CanSwitch(0x10000F,true,false,false,false,false,true));
+    assert(!CanSwitch(0x10000F,true,true,false,false,false,true));
+    assert(!CanSwitch(0x10000F,true,false,true,false,false,true));
+    assert(!CanSwitch(0x10000F,true,false,false,true,false,true));
+    assert(!CanSwitch(0x10000F,true,false,false,false,true,true));
     char code[5]{};
     assert(!SamDlcRouting::Code(code,"8100",false,0x100007,true));
     assert(!SamDlcRouting::Code(code,"8100",true,0x47,false));

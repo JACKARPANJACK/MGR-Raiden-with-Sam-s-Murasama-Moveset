@@ -3,6 +3,7 @@
 
 namespace gui
 {
+    bool IsMenuVisible();
     static constexpr size_t MAX_HISTORY = 32;
 
     struct HistoryEntry

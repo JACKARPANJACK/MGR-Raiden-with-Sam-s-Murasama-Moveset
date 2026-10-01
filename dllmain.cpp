@@ -8,6 +8,7 @@
 #include "SamMovesetManager.h"
 #include "WeaponSwitcher.h"
 #include "KunaiSubweapon.h"
+#include "WeaponSlowMotionFix.h"
 #include "SamDlcRouting.h"
 #include "SamCombatRouting.h"
 #include "gui.h"
@@ -364,6 +365,7 @@ static void __cdecl CustomTickGame()
             WeaponSwitcher::Get().Tick(player);
             KunaiSubweapon::Get().Tick(player);
             SamMovesetManager::Instance().OnTick(player);
+            WeaponSwitcher::Get().ReserveUltimate(player);
         }
     }
     __except (EXCEPTION_EXECUTE_HANDLER) {}
@@ -388,6 +390,7 @@ static void __cdecl CustomTickGame()
 // ============================================================================
 static void InitHooks()
 {
+    WeaponSlowMotionFix::Install();
     // Native 7A4410 grenade throw release, after its ammo consumption and aim.
     if(KunaiSubweapon::Get().Install()) injector::MakeCALL(shared::base+0x7A4883,ReleaseKunai);
     // Hard reset the opt-in state

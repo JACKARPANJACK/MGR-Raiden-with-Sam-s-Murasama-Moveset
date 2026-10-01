@@ -5,6 +5,7 @@
 #include "imgui/imgui_impl_win32.h"
 #include <Hw.h>
 #include <windows.h>
+#include <atomic>
 #include "injector/injector.hpp"
 
 
@@ -15,7 +16,8 @@
 
 static WNDPROC g_originalWndProc = nullptr;
 static bool g_imguiInitialized = false;
-static bool g_guiVisible = false;
+static std::atomic<bool> g_guiVisible{false};
+bool gui::IsMenuVisible() { return g_guiVisible.load(); }
 
 #include <memory>
 
@@ -108,7 +110,10 @@ static void RenderSamDebug()
 
     ImGui::SetNextWindowSize(ImVec2(660.0f, 540.0f), ImGuiCond_FirstUseEver);
 
-    if (ImGui::Begin("MGR: Raiden with Sam's Moveset - Diagnostics (Press '0' to Close)", &g_guiVisible))
+    bool menuOpen=g_guiVisible.load();
+    const bool drawMenu=ImGui::Begin("MGR: Raiden with Sam's Moveset - Diagnostics (Press '0' to Close)", &menuOpen);
+    g_guiVisible=menuOpen;
+    if(drawMenu)
     {
         // --- Header Status ---
         if (state.active)
@@ -138,11 +143,11 @@ static void RenderSamDebug()
         ImGui::Spacing();
         ImGui::Separator();
 
-        ImGui::Text("X: next ultimate / queue after current ground attack");
+        ImGui::Text("X / controller B: next ultimate / queue after current ground attack");
         static const char* weaponNames[]={"Raiden sword","Murasama / Sam moveset","Pole-arm","Sai","Pincer blades","Unarmed"};
         int selectedWeapon=gui::PendingWeapon()<0?gui::SelectedWeapon():gui::PendingWeapon();
         if(ImGui::Combo("Weapon",&selectedWeapon,weaponNames,6)) gui::SelectWeapon(selectedWeapon);
-        ImGui::TextWrapped("Q / E or D-pad Left / Right: previous / next weapon. D-pad Up: Murasama; Down: Raiden sword. Murasama enables Sam; switching away disables it. G also toggles Sam.");
+        ImGui::TextWrapped("Mouse wheel Up / Down, Q / E or D-pad Left / Right: previous / next weapon. Assets preload; Sam attacks can swap in their final 6 recovery frames. Up: Murasama; Down: Raiden sword. G / Select toggles Sam.");
         if(gui::PendingWeapon()>=0) ImGui::Text("Weapon switch queued...");
         static const char* kunaiNames[]={"Native inventory subweapon","Stun kunai","Explosive kunai","Heat-blade kunai"};
         int selectedKunai=gui::SelectedKunai();

@@ -1,6 +1,49 @@
 # Runtime repair, October 1, 2026
 
-## Current build: kunai-subweapon-6
+## Current build: smooth-switch-8
+
+Added native DirectInput mouse-wheel cycling (up previous/down next), with partial
+notch accumulation and latest-selection buffering. Q/E and D-pad Left/Right
+remain available. Preloads and retains all four secondary/unarmed weapon archives
+for the current player's lifetime; Sam DLC assets are also requested ahead of
+selection. Duplicate selections no longer recreate equipment. Sam's ordinary
+ground attacks allow swaps during their last six recovery frames; charge holds,
+Blade Mode, Round Trip, ultimates, flight and scripted states remain guarded.
+
+Controller B/Circle now queues the same lightning ultimate as keyboard X and is
+reserved from native gameplay actions in eligible Sam combat states. Corrected
+the earlier controller-toggle masks: the SDK's B is 0x20, while Select/Back is
+0x200 and L3/R3 are 0x1000/0x8000. B no longer toggles Sam off. Menu, scripted and
+QTE inputs retain their native behavior. Input state is restored after the native
+tick; menu visibility uses an atomic flag across render and game threads.
+
+Validation: Release Win32 build and fourteen suites, including wheel remainder,
+wraparound, recovery guards and B press-edge/context tests. Native switch latency,
+attack transitions and controller feel still require in-game testing.
+
+## Previous build: encounter-unarmed-7
+
+Three recent game dumps (28744, 1264 and 26300) show the same access violation:
+native slow-motion propagation at RVA 7871BF reads EAX+4F0 with EAX=0 while the
+optional custom-weapon handle is absent. Fixed all eight matching dereferences
+in the immediate/deferred slow-rate routines at 787120/787260. Each exact-byte
+checked guard returns a null destination for an absent Behavior, allowing the
+existing native TEST/JZ to skip only that weapon. Native player/weapon slow-rate
+timing and the rest of damage processing stay in the original routines.
+
+Unarmed now selects native custom weapon ID 5 and streams/attaches wp2040, which
+contains the 2cxx unarmed motions/sequences, effects and sounds. Sets native
+unarmed sword state 1 (also used by the game's prologue setup), preserving sword
+and sheath entities. Removed the setSwordLost(TRUE) path, which hid the sword
+and set sword-lost state 2.
+
+Validation: crash-dump exception/context analysis, executable-backed checks of
+all eight native guard sites and unarmed ID/state, wp2040 asset fixtures, Release
+Win32 build and fourteen automated suites, including actual x86 null-load/stack
+regressions. The patched encounter and unarmed
+transitions still require a new in-game run; this is not a playtest result.
+
+## Previous build: kunai-subweapon-6
 
 Added an independent Native/Stun/Explosive/Heat-blade subweapon selector on F7/F8
 and the mod menu. Uses grenade inventory slot 1, native ammo consumption and

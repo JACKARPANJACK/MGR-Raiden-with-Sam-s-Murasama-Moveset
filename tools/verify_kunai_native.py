@@ -35,3 +35,12 @@ for address,expected in ((0x1641b88,250.0),(0x1641bac,0.38),(0x163b5e4,0.5),(0x1
     assert abs(struct.unpack('<f',read(address-base,4))[0]-expected)<1e-5
 assert read(0x7a48b4,3)==bytes.fromhex('c20800') # __thiscall throw takes two args
 print('Verified native Raiden grenade release, generic factory, wp0372 heat-blade setup and movement constants.')
+for site in (0x7871bf,0x787208,0x78731d,0x78736e,0x787491,0x7874e2,0x7875ff,0x787650):
+    esi=site==0x787208
+    expected=bytes((0x8b,0xb0 if esi else 0xb8,0xf0,4,0,0,0x85,0xf6 if esi else 0xff,0x74))
+    assert read(site,9)==expected, f'Unexpected native weapon guard site {site:x}'
+    skip=site+10+struct.unpack('<b',read(site+9,1))[0]
+    assert skip>site+10 and skip<site+80
+assert bytes.fromhex('83f805') in read(0x780980,0x20)
+assert read(0x840aef,10)==bytes.fromhex('c7870014000001000000')
+print('Verified all eight null-weapon crash sites and native unarmed ID/state contracts.')
