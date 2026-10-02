@@ -27,3 +27,4 @@ imgui.ini
 /tests/*
 !/tests/smg_tests.cpp
 !/tests/kunai_tests.cpp
+*.py
