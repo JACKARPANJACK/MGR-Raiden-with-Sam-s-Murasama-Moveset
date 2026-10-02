@@ -120,19 +120,28 @@ public:
     }
     void Grab(Pl0000* player)
     {
-        Entity* target = SamTargets::Find(player,2.5f,true);
-        if (Ordinary(target) && Distance(player->m_pEntity,target) <= 2.5f)
+        Entity* target = SamTargets::Find(player,3.5f,true);
+        if (Ordinary(target) && Distance(player->m_pEntity,target) <= 3.5f)
+        {
             Hold(Track(target), 180, true);
+            auto* enemy = static_cast<BehaviorAppBase*>(target->m_pBehavior);
+            if (enemy)
+            {
+                enemy->m_Rot.y = Hw::RadAdjust(player->m_Rot.y + 3.14159265f);
+                enemy->requestAnimationByName("0320", 0, 0.05f, 1.0f, 0, 0.0f, 1.0f);
+            }
+        }
     }
     bool Slam(Pl0000* player)
     {
         for (auto& v : victims) if (v->grapple && v->remaining)
         {
             Entity* target = v->handle.getEntity();
-            if (!Ordinary(target) || Distance(player->m_pEntity,target) > 3.0f) { Release(*v); return false; }
+            if (!Ordinary(target) || Distance(player->m_pEntity,target) > 4.0f) { Release(*v); return false; }
             auto* enemy = static_cast<BehaviorAppBase*>(target->m_pBehavior);
             int native = reinterpret_cast<int(__thiscall*)(Pl0000*,int)>(shared::base + 0x77ED30)(player,12);
             enemy->damage(SamBalancePolicy::Damage(native,12,false,1,enemy->m_HpMax),false);
+            enemy->requestAnimationByName("0340", 0, 0.05f, 1.0f, 0, 0.0f, 1.0f);
             Lightning(player,target,&v->visual); v->visualTicks = 24;
             Release(*v);
             return true;
@@ -172,13 +181,15 @@ public:
             {
                 auto anchor = player->m_pEntity->getTransPos();
                 auto pos = target->getTransPos();
-                anchor.x += std::sin(player->m_Rot.y)*1.2f;
-                anchor.z += std::cos(player->m_Rot.y)*1.2f;
-                pos.x += (anchor.x-pos.x)*0.25f; pos.z += (anchor.z-pos.z)*0.25f;
+                anchor.x += std::sin(player->m_Rot.y)*1.1f;
+                anchor.z += std::cos(player->m_Rot.y)*1.1f;
+                pos.x += (anchor.x-pos.x)*0.35f; pos.z += (anchor.z-pos.z)*0.35f;
                 target->m_pBehavior->setTransPos(pos);
                 if (target->m_pBehavior->m_pCharacterControl)
                     target->m_pBehavior->m_pCharacterControl->setPosition(pos,TRUE);
                 target->setTransPos(pos);
+                auto* enemy = static_cast<BehaviorAppBase*>(target->m_pBehavior);
+                if (enemy) enemy->m_Rot.y = Hw::RadAdjust(player->m_Rot.y + 3.14159265f);
             }
         }
         Entity* target = SamTargets::Find(player);

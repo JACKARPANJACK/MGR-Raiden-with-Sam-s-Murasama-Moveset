@@ -6,7 +6,7 @@ namespace SamDirectionalPolicy
     enum Direction { None, Forward, Back, Left, Right };
     inline Direction Resolve(float x, float y)
     {
-        if (std::fabs(x) < 0.55f && std::fabs(y) < 0.55f) return None;
+        if (std::fabs(x) < 0.40f && std::fabs(y) < 0.40f) return None;
         if (std::fabs(y) >= std::fabs(x)) return y > 0 ? Forward : Back;
         return x < 0 ? Left : Right;
     }

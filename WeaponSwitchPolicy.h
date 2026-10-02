@@ -33,19 +33,29 @@ namespace WeaponSwitchPolicy
     constexpr unsigned PadPress(unsigned on,unsigned trig,unsigned previous)
     { return (on|trig)&~previous&0xFu; }
 
+    inline unsigned PadConsumeMask()
+    {
+        unsigned mask = 0;
+        if (SamConfig::GetInt("WeaponSwitch", "CycleNextDPadDown", 0)) mask |= 0x4; // Down
+        if (SamConfig::GetInt("WeaponSwitch", "CycleNextDPadRight", 0)) mask |= 0x2; // Right
+        if (SamConfig::GetInt("WeaponSwitch", "CyclePrevDPadLeft", 0)) mask |= 0x8; // Left
+        if (SamConfig::GetInt("WeaponSwitch", "CyclePrevDPadUp", 0)) mask |= 0x1; // Up
+        return mask;
+    }
+
     inline int InputSelection(int current,bool previous,bool next,unsigned padTrig)
     {
-        // Check if D-pad down is enabled for weapon cycle
-        static int useDPadDown = -1;
-        if (useDPadDown == -1)
-            useDPadDown = SamConfig::GetInt("WeaponSwitch", "CycleNextDPadDown", 0);
-
-        // Up/Down are direct sword presets; Left/Right cycle every weapon.
-        if(padTrig&0x8) return Murasama;
-        if(padTrig&0x4 && !useDPadDown) return Sword;
+        static int downNext = -1, rightNext = -1, leftPrev = -1, upPrev = -1;
+        if (downNext == -1)
+        {
+            downNext = SamConfig::GetInt("WeaponSwitch", "CycleNextDPadDown", 1);
+            rightNext = SamConfig::GetInt("WeaponSwitch", "CycleNextDPadRight", 0);
+            leftPrev = SamConfig::GetInt("WeaponSwitch", "CyclePrevDPadLeft", 0);
+            upPrev = SamConfig::GetInt("WeaponSwitch", "CyclePrevDPadUp", 0);
+        }
         
-        const bool back=previous || (padTrig&0x1)!=0;
-        const bool forward=next || (padTrig&0x2)!=0 || (useDPadDown && (padTrig&0x4)!=0);
+        bool back = previous || (upPrev && (padTrig & 0x1)) || (leftPrev && (padTrig & 0x8));
+        bool forward = next || (downNext && (padTrig & 0x4)) || (rightNext && (padTrig & 0x2));
         return back==forward ? -1 : Cycle(current,forward?1:-1);
     }
     constexpr bool CanSwitch(uint32_t state,bool alive,bool airborne,bool scripted,bool blade,bool flight,bool recovery=false)

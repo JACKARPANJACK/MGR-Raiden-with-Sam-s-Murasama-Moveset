@@ -11,6 +11,7 @@
 #include "1-EventTriggerForSam.h"
 #include "1-EnemyActionHandles.h"
 #include "SamResourceManager.h"
+#include "SamModelPatcher.h"
 #include "SamNativeRuntime.h"
 #include "SheathController.h"
 #include "ChargeController.h"
@@ -405,7 +406,7 @@ public:
         ResetUltimate();
         g_GameStateManager.IsMainSamPlayer = false;
         g_GameStateManager.IsStyleChanged = false;
-        g_ChangePlayerHandle.ChangeModelID();
+        SamModelPatcher::Instance().ApplySamModels(false);
     }
 
     void CopyDebugSnapshot(DebugSnapshot& out) const
@@ -565,8 +566,8 @@ private:
         ResetUltimate();
         m_directionalInput.Reset();
 
-        // Switch model IDs to Sam's Murasama sheath/sword and re-attach sheath to hip
-        g_ChangePlayerHandle.ChangeModelID();
+        // Switch model IDs to Sam's Murasama sheath and re-attach sheath to hip
+        SamModelPatcher::Instance().ApplySamModels(true);
         SheathController::Instance().SetSheathToHip(player, true);
 
         Log("[SamMoveset] ACTIVATED smooth-switch-8: Sam update/context/attack table; light=%d heavy=%d charge=%d speed=1.20 player=%p",
@@ -602,7 +603,7 @@ private:
         g_GameStateManager.IsMainSamPlayer = false;
         g_GameStateManager.IsStyleChanged = false;
         g_GameStateManager.InstantCharge = false;
-        g_ChangePlayerHandle.ChangeModelID();
+        SamModelPatcher::Instance().ApplySamModels(false);
         m_chargeController.Reset();
         m_bBossEnderActive = false;
         m_bossEnderTicks = 0;
@@ -755,8 +756,7 @@ public:
         const int animation = player->setDirectAnimation(clip.motion, sequence, 0,
             0.05f, 1.0f, 0x8000000, 0.0f, SamBalancePolicy::AttackSpeed);
         if (animation == -1) return false;
-        StopAddonCharge();
-        if (!std::strcmp(code,"3000") || !std::strcmp(code,"3500"))
+        if (!std::strcmp(code,"3000") || !std::strcmp(code,"3500") || !std::strcmp(code,"3020") || !std::strcmp(code,"92e0"))
         {
             if (!m_pAddonChargeEsp) m_pAddonChargeEsp=new cEspControler();
             SamNativeRuntime::Get().CreatePlayerEffect(player,117,m_pAddonChargeEsp);
@@ -911,7 +911,7 @@ public:
             (SamUltimatePolicy::Neutral(action) || SamUltimatePolicy::Attack(action)) && addon >= 0)
         {
             m_pendingAddon = addon;
-            m_addonTicks = 18;
+            m_addonTicks = 30;
             m_ultimateQueue.Reset();
         }
         if (finisherPressed && alive && !airborne && !m_roundTripActive && !m_bBossEnderActive &&
@@ -981,8 +981,7 @@ public:
         }
         if (m_roundTripActive || (!m_ultimateQueue.pending && m_pendingAddon < 0)) return;
         const bool finished = g_GameFunctionManager.IsAnimationEnded(player, 0);
-        const bool addonCancel = m_pendingAddon >= 0 && SamUltimatePolicy::Attack(action) &&
-            !charging && (player->ckSeqFlag(1) || player->ckSeqFlag(2) || player->ckSeqFlag(24));
+        const bool addonCancel = m_pendingAddon >= 0 && (SamUltimatePolicy::Attack(action) || SamUltimatePolicy::Neutral(action) || charging);
         if (!addonCancel && !SamUltimatePolicy::CanStart(action, alive, airborne, finished)) return;
         m_currentAddon = m_pendingAddon >= 0;
         m_currentUltimate = m_currentAddon ? static_cast<unsigned>(m_pendingAddon) :

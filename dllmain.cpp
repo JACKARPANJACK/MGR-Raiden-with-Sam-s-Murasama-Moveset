@@ -271,6 +271,17 @@ static int __fastcall Custom_Behavior_RequestAnimationByMap(Behavior* pThis, voi
     {
         if (oBehavior_RequestAnimationByMap)
             result = oBehavior_RequestAnimationByMap(pThis, animationId);
+        if (result == -1 && active && g_Scene.m_pPlayer)
+        {
+            auto* nativeMap = SamNativeRuntime::Get().NativeAnimationMap(g_Scene.m_pPlayer);
+            if (nativeMap && pThis->m_pAnimationMap != nativeMap)
+            {
+                auto* savedMap = pThis->m_pAnimationMap;
+                pThis->m_pAnimationMap = nativeMap;
+                result = oBehavior_RequestAnimationByMap(pThis, animationId);
+                pThis->m_pAnimationMap = savedMap;
+            }
+        }
     }
     __finally
     {
@@ -290,7 +301,8 @@ static int __fastcall Custom_Behavior_RequestAnimationByName(Behavior* pThis, vo
     const bool nativeSam = active && SamNativeRuntime::Get().Active(g_Scene.m_pPlayer);
     if (active && anim && (std::strstr(anim, "3500") || std::strstr(anim, "3501")))
     {
-        SamMovesetManager::Instance().TriggerAddon(7);
+        if (!SamMovesetManager::Instance().IsBossEnderActive())
+            SamMovesetManager::Instance().TriggerAddon(7);
     }
     char bladeCode[5]{};
     // Native Sam state nodes also request 4xxx/8xxx/9xxx clips for taunts,

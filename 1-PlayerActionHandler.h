@@ -112,7 +112,7 @@ private:
 				ctx.TargetEnemyEntity = targetEntity;
 				ctx.TargetEnemy = static_cast<BehaviorEmBase*>(targetEntity->m_pBehavior);
 				ctx.TargetPlayerEnemyDistance = (ctx.TargetEnemy->m_TransPos - ctx.player->m_TransPos).length();
-				ctx.IsEnemyIndexEnableQTE = (ctx.TargetEnemy->m_ModelIndex == 0x20110 || ctx.TargetEnemy->m_ModelIndex == 0x20310 || ctx.TargetEnemy->m_ModelIndex == 0x20020);
+				ctx.IsEnemyIndexEnableQTE = (ctx.TargetEnemy != nullptr);
 			}
 		}
 

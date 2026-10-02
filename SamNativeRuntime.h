@@ -187,6 +187,12 @@ public:
             return it->second->raidenParameters;
         return player->m_pBattleParameterImplement;
     }
+    AnimationMap* NativeAnimationMap(Pl0000* player) const
+    {
+        if(!player) return nullptr;
+        const auto it=records.find(player);
+        return it!=records.end() ? it->second->map : nullptr;
+    }
     bool Active(Pl0000* player) const
     {
         const auto it = records.find(player);

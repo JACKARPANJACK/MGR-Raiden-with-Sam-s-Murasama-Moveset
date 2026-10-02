@@ -31,10 +31,10 @@ namespace SamBossSequence
         if (!std::strcmp(code, "2200") || !std::strcmp(code, "2220")) return 4;
         if (!std::strcmp(code, "9100") || !std::strcmp(code, "9101") || !std::strcmp(code, "9102")) return 4;
         if (!std::strcmp(code, "9108")) return 12;
-        if (!std::strcmp(code, "92e4")) return bossNumber == 14 ? 26 : 4;
+        if (!std::strcmp(code, "3015") || !std::strcmp(code, "92e4")) return bossNumber == 14 ? 26 : 4;
         if (!std::strcmp(code, "2600") || !std::strcmp(code, "2610")) return 10;
         if (!std::strcmp(code, "3004") || !std::strcmp(code, "3024") ||
-            !std::strcmp(code, "3017")) return 26;
+            !std::strcmp(code, "3022") || !std::strcmp(code, "3017")) return 26;
         if (!std::strcmp(code, "3210")) return 4;
         return 12;
     }

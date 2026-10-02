@@ -19,7 +19,7 @@ namespace SamUltimatePolicy
         {"Boss leaping slash", "3300", "3302"},
         {"Sam rapid slashes", "9100", "9108"},
         {"Boss sweeping combo", "2600", "2610"},
-        {"Boss Judgement Cut", "92e0", "92e4"},
+        {"Boss Judgement Cut", "92e0", "3015"},
         {"Raiden thunder slice", "", "2400", true},
         {"Raiden lightning storm", "", "3501", true},
         {"Boss unarmed grab & smash", "a648", "a649"},

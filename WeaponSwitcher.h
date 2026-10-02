@@ -107,10 +107,17 @@ public:
             const int wheel=WeaponSwitchPolicy::WheelSteps(g_Mouse.m_Wheel,wheelRemainder);
             if(wheel) Select(WeaponSwitchPolicy::Cycle(Pending()<0?Selected():Pending(),wheel));
             savedWheel=g_Mouse.m_Wheel;g_Mouse.m_Wheel=0;wheelReserved=true;
-            // Q/E remain plugin weapon-cycle controls. Leave the D-pad
-            // available to the native inventory, including the knife entry.
+            // Q/E remain plugin weapon-cycle controls.
             {
-                savedPadOn=savedPadTrig=savedPadRep=0;
+                unsigned padConsume = WeaponSwitchPolicy::PadConsumeMask();
+                savedPadOn = g_dbPad.m_On & padConsume;
+                savedPadTrig = g_dbPad.m_Trig & padConsume;
+                savedPadRep = g_dbPad.m_Rep & padConsume;
+                padMask |= padConsume;
+                g_dbPad.m_On &= ~padConsume;
+                g_dbPad.m_Trig &= ~padConsume;
+                g_dbPad.m_Rep &= ~padConsume;
+                
                 savedKeyOn=g_Keyboard.m_pOn[2]&KeyMask;
                 savedKeyTrig=g_Keyboard.m_pTrig[2]&KeyMask;
                 savedKeyRep=g_Keyboard.m_pRep[2]&KeyMask;

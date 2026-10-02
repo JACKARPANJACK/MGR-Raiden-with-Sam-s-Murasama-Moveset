@@ -154,8 +154,7 @@ private:
 
         // IDA 0x18a0b00: entity factory registers 0x11404 with class name "Pl0013",
         // but in Raiden's campaign, Pl0013 is hardcoded to the Prologue Sheath.
-        // Pl0010_SUBWEP1 is a generic container that respects the passed Object ID.
-        sam = g_EntitySystem.createEntity("Pl0010_SUBWEP1", static_cast<eObjID>(0x11404), nullptr);
+        sam = g_EntitySystem.createEntity("Pl0013", static_cast<eObjID>(0x11404), nullptr);
         if (!sam)
         {
             if (!m_sheathTraceDone)

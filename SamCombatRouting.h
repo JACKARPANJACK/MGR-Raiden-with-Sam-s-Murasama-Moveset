@@ -34,7 +34,7 @@ namespace SamCombatRouting
         struct Pair { const char* raiden; const char* sam; };
         static constexpr Pair pairs[] = {
             // Stormbringer (360 spin + heavy) -> Judgement Cut
-            {"3500", "92e0"}, {"3501", "92e4"}, {"3502", "92e4"},
+            {"3500", "92e0"}, {"3501", "3015"}, {"3502", "3015"},
 
             // Ground Light Attack String & branches
             {"2100", "2000"}, {"2101", "2001"}, {"2102", "2002"}, {"2103", "2003"},
@@ -98,7 +98,7 @@ namespace SamCombatRouting
             {"2522", "2522"}, {"2530", "2530"}, {"2532", "2532"},
             {"2540", "2540"}, {"2542", "2542"},
             {"2600", "2600"}, {"2601", "2600"}, {"2602", "2610"}, {"2610", "2610"},
-            {"2700", "2700"}, {"2800", "2800"}
+            {"2700", "92e0"}, {"2800", "92e4"}
         };
         for (const auto& pair : pairs)
             if (std::strcmp(code, pair.raiden) == 0) return pair.sam;
