@@ -659,8 +659,8 @@ public:
 
     static bool IsThunderMove(unsigned index)
     {
-        if (index >= SamUltimatePolicy::Count) return false;
-        const char* name = SamUltimatePolicy::Moves[index].name;
+        if (index >= SamUltimatePolicy::Count()) return false;
+        const char* name = SamUltimatePolicy::Moves[index].name.c_str();
         return (std::strstr(name, "thunder") != nullptr || std::strstr(name, "lightning") != nullptr);
     }
 
@@ -671,13 +671,24 @@ public:
 
     const char* NextUltimateName() const
     {
-        return SamUltimatePolicy::Moves[SamUltimatePolicy::UltimateIndex(m_bossEnderIndex)].name;
+        return SamUltimatePolicy::Count() > 0 ? SamUltimatePolicy::Moves[SamUltimatePolicy::UltimateIndex(m_bossEnderIndex)].name.c_str() : "";
     }
     bool UltimateQueued() const { return m_ultimateQueue.pending; }
     bool IsRoundTripActive() const { return m_roundTripActive; }
     void SetUltimateIndex(unsigned int index)
     {
-        m_bossEnderIndex = index % SamUltimatePolicy::UltimateCount;
+        m_bossEnderIndex = SamUltimatePolicy::UltimateCount() ? index % SamUltimatePolicy::UltimateCount() : 0;
+    }
+    bool IsBossEnderActive() const { return m_bBossEnderActive; }
+    void TriggerAddon(int addonIndex)
+    {
+        if (m_bActive && m_activePlayer && !m_roundTripActive && !m_bBossEnderActive &&
+            addonIndex >= 0 && addonIndex < static_cast<int>(SamUltimatePolicy::Count()))
+        {
+            m_pendingAddon = addonIndex;
+            m_addonTicks = 18;
+            m_ultimateQueue.Reset();
+        }
     }
     void TriggerUltimateNow()
     {
@@ -953,7 +964,7 @@ public:
                 if (m_ultimateStage == 0)
                 {
                     m_ultimateStage = 1;
-                    if (!PlayBossStage(player, SamUltimatePolicy::Moves[m_currentUltimate].release))
+                    if (!PlayBossStage(player, SamUltimatePolicy::Moves[m_currentUltimate].release.c_str()))
                         FinishUltimate(player);
                 }
                 else FinishUltimate(player);
@@ -978,9 +989,9 @@ public:
             SamUltimatePolicy::UltimateIndex(m_bossEnderIndex);
         const auto& move = SamUltimatePolicy::Moves[m_currentUltimate];
         // Preflight both stages before taking ownership of combat dispatch.
-        for (const char* code : {move.windup, move.release})
+        for (const char* code : {move.windup.c_str(), move.release.c_str()})
         {
-            if (!code) continue;
+            if (!code || !code[0]) continue;
             const auto clip = move.raiden ? SamResourceManager::Instance().GetRaidenClip(code) :
                 SamResourceManager::Instance().GetClip(code, SamArchiveLookup::Source::Boss, false, true);
             if (!clip.motion || !clip.sequence || !BossSequence(code, clip.sequence, move.raiden))
@@ -994,10 +1005,10 @@ public:
         m_ultimateQueue.Reset();
         m_pendingAddon = -1;
         m_bBossEnderActive = true;
-        m_ultimateStage = move.windup ? 0 : 1;
+        m_ultimateStage = !move.windup.empty() ? 0 : 1;
         player->m_CurrentInput.m_Trig &= ~(player->m_ButtonLightAttack | player->m_ButtonHeavyAttack);
         player->setRno(SamUltimatePolicy::Action, 0, 0, 0);
-        if (!PlayBossStage(player, move.windup ? move.windup : move.release)) FinishUltimate(player);
+        if (!PlayBossStage(player, !move.windup.empty() ? move.windup.c_str() : move.release.c_str())) FinishUltimate(player);
         else if (!m_currentAddon) ++m_bossEnderIndex;
     }
 

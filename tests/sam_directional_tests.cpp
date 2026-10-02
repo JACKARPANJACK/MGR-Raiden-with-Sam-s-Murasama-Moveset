@@ -23,6 +23,24 @@ int main()
     input.Reset();
     assert(input.Poll(0, -1, false, true) == 12);
     assert(input.Poll(1, 0, true, true) == -1); // native dodge stays available
+
+    // 360-degree stick flick tests
+    input.Reset();
+    for (int step = 0; step <= 16; ++step)
+    {
+        float a = -step * (2.0f * 3.14159265f / 16.0f);
+        input.Poll(std::cos(a), std::sin(a), false, false);
+    }
+    assert(input.Poll(0, 0, false, true) == 7); // 360 flick + Heavy -> Judgement Cut
+    assert(input.Poll(0, 0, false, true) == -1); // consumed
+
+    input.Reset();
+    for (int step = 0; step <= 16; ++step)
+    {
+        float a = step * (2.0f * 3.14159265f / 16.0f);
+        input.Poll(std::cos(a), std::sin(a), false, false);
+    }
+    assert(input.Poll(0, 1, false, true) == 7); // CCW 360 flick + Heavy -> Judgement Cut
     assert(Resolve(0.1f, 0.2f) == None);
     assert(Resolve(-1, 0.7f) == Left);
     std::set<int> addons;

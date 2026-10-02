@@ -3,6 +3,7 @@
 #include <PlayerManagerImplement.h>
 #include <array>
 #include <cstring>
+#include "NativeSmgMenuPolicy.h"
 
 // Native DLC3_BladeKnife: itemlist.bxm ID 44, Type 14, capacity 10.
 // Raiden's menu already enumerates this alias and maps it to subweapon 10.
@@ -17,10 +18,33 @@ namespace NativeKnifeInventory
     inline std::array<unsigned char,0x48> definition{};
     inline bool definitionReady=false;
     inline bool raidenScene=false;
+    inline bool smgMenuReady=false;
+    inline std::array<unsigned char,0x48> smgDefinition{};
+    inline bool smgDefinitionReady=false;
+
+    inline void* SmgDefinition(void* registry)
+    {
+        if(!raidenScene || !smgMenuReady) return nullptr;
+        if(!smgDefinitionReady)
+        {
+            const void* source=originalDefinition(registry,0x3800CB76); // RPG, native Type 0 gun possession.
+            if(!source) return nullptr;
+            std::memcpy(smgDefinition.data(),source,smgDefinition.size());
+            auto* words=reinterpret_cast<unsigned*>(smgDefinition.data());
+            words[0]=NativeSmgMenuPolicy::ItemId; words[2]=NativeSmgMenuPolicy::Alias;
+            // Keep a native inventory object; the equipped gun uses enemy wp0020.
+            words[4]=1;
+            std::memset(smgDefinition.data()+0x18,0,32);
+            std::memcpy(smgDefinition.data()+0x18,"Kriss Vector SMG",16);
+            smgDefinitionReady=true;
+        }
+        return smgDefinition.data();
+    }
 
     inline void* __fastcall LookupDefinition(void* registry,void*,unsigned alias)
     {
         void* native=originalDefinition(registry,alias);
+        if(!native && alias==NativeSmgMenuPolicy::Alias) return SmgDefinition(registry);
         if (native || alias!=Alias || !raidenScene) return native;
         if (!definitionReady)
         {
@@ -42,10 +66,14 @@ namespace NativeKnifeInventory
     inline void* __fastcall LookupDefinitionById(void* registry,void*,unsigned id)
     {
         void* native=originalDefinitionById(registry,id);
+        if(!native && id==NativeSmgMenuPolicy::ItemId) return SmgDefinition(registry);
         return native || id!=44 || !raidenScene ? native : LookupDefinition(registry,nullptr,Alias);
     }
     inline unsigned __cdecl EquippedAlias()
     {
+        if(raidenScene && smgMenuReady && g_pPlayerManager &&
+            g_pPlayerManager->getSubWeaponEquipped()==NativeSmgMenuPolicy::Slot)
+            return NativeSmgMenuPolicy::Alias;
         if (raidenScene && g_pPlayerManager && g_pPlayerManager->getSubWeaponEquipped()==Slot)
             return Alias;
         return originalEquippedAlias();
@@ -69,5 +97,24 @@ namespace NativeKnifeInventory
         reinterpret_cast<void(__thiscall*)(void*,cItemPossessionBase**)>(table[2])(manager,&item);
         item->set(Capacity);
         return Item()==item;
+    }
+    inline cItemPossessionBase* SmgItem()
+    {
+        return reinterpret_cast<cItemPossessionBase*(__thiscall*)(void*,unsigned)>(shared::base+0x54E5E0)
+            (reinterpret_cast<void*>(shared::base+0x1486EA0),NativeSmgMenuPolicy::Alias);
+    }
+    inline bool EnsureSmg()
+    {
+        if(!raidenScene || !smgMenuReady || !originalDefinition) return false;
+        if(auto* item=SmgItem()) {if(!item->hasPossession()) item->set(1);return true;}
+        void* source=SmgDefinition(reinterpret_cast<void*>(shared::base+0x1486A60));
+        if(!source) return false;
+        auto* item=reinterpret_cast<cItemPossessionBase*(__cdecl*)(void*)>(shared::base+0x551C80)(source);
+        if(!item) return false;
+        void* manager=reinterpret_cast<void*>(shared::base+0x1486EA0);
+        auto** table=*reinterpret_cast<void***>(manager);
+        reinterpret_cast<void(__thiscall*)(void*,cItemPossessionBase**)>(table[2])(manager,&item);
+        item->set(1);
+        return SmgItem()==item;
     }
 }

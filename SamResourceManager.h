@@ -24,6 +24,7 @@ private:
     Hw::cFmerge m_grenadeFmerge;
     bool m_grenadeBank=false;
     bool m_samBank = false, m_bossBank = false, m_wolfBank = false, m_heatbladeBank = false;
+    bool m_sheathBank = false;
     struct RequestState { unsigned int id; bool requested; bool pinned; };
     RequestState m_requests[9] = {
         {0x11400, false, false}, {0x11403, false, false},
@@ -119,15 +120,17 @@ public:
             if (m_isLoaded)
             {
                 if (!m_samBank) m_samBank = RegisterBank(0x11400, m_pl1400Fmerge);
+                if (g_ObjReadManager.isObjectLoaded(static_cast<eObjID>(0x11404), 0) &&
+                    !m_sheathBank)
+                {
+                    g_ObjReadManager.getDataAtSet(m_pl1404Fmerge, static_cast<eObjID>(0x11404), 0);
+                    m_sheathBank = RegisterBank(0x11404, m_pl1404Fmerge);
+                }
                 if (!m_bossBank) m_bossBank = RegisterBank(0x20020, m_em0020Fmerge);
                 if (!m_wolfBank) m_wolfBank = RegisterBank(0x20220, m_wolfFmerge);
                 if (!m_heatbladeBank) m_heatbladeBank = RegisterBank(0x30372, m_heatbladeFmerge);
                 if (!m_grenadeBank) m_grenadeBank = RegisterBank(0x31011,m_grenadeFmerge);
-                if (g_ObjReadManager.isObjectLoaded(static_cast<eObjID>(0x20020), 0))
-                    g_ObjReadManager.getDataAtSet(m_em0020Fmerge, static_cast<eObjID>(0x20020), 0);
-                if (g_ObjReadManager.isObjectLoaded(static_cast<eObjID>(0x11404), 0))
-                    g_ObjReadManager.getDataAtSet(m_pl1404Fmerge, static_cast<eObjID>(0x11404), 0);
-                if (g_ObjReadManager.isObjectLoaded(static_cast<eObjID>(0x10010), 0))
+                if (!m_raidenFmerge.getFileAmount() && g_ObjReadManager.isObjectLoaded(static_cast<eObjID>(0x10010), 0))
                     g_ObjReadManager.getDataAtSet(m_raidenFmerge, static_cast<eObjID>(0x10010), 0);
 
                 RegisterEffectsAndSound();
@@ -271,6 +274,12 @@ public:
                 fallback = "023a";
             else if (!std::strcmp(cleanCode, "3003") || !std::strcmp(cleanCode, "3004"))
                 fallback = "3010";
+            else if (!std::strcmp(cleanCode, "9100") || !std::strcmp(cleanCode, "9101") || !std::strcmp(cleanCode, "9102"))
+                fallback = "9108";
+            else if (!std::strcmp(cleanCode, "92e0"))
+                fallback = "2250";
+            else if (!std::strcmp(cleanCode, "92e4"))
+                fallback = "2253";
 
             if (fallback)
             {
@@ -305,7 +314,10 @@ public:
         for (size_t i = 0, count = m_em0020Fmerge.getFileAmount(); i < count; ++i)
             if (m_em0020Fmerge.getFileIndexData(i) == data)
                 return m_em0020Fmerge.getFileIndexSize(i);
-        return 0;
+        for (size_t i = 0, count = m_pl1400Fmerge.getFileAmount(); i < count; ++i)
+            if (m_pl1400Fmerge.getFileIndexData(i) == data)
+                return m_pl1400Fmerge.getFileIndexSize(i);
+        return SamBossSequence::Size(data);
     }
 
     bool IsLoaded() const { return m_isLoaded; }
@@ -330,6 +342,7 @@ public:
         }
         m_isLoaded = m_effectsRegistered = m_requestIssued = false;
         m_samBank = m_bossBank = m_wolfBank = m_heatbladeBank = false;
+        m_sheathBank = false;
         m_grenadeBank=false;
         // Sequence copies are immutable and may still be bound during cleanup.
         // Reacquire archive pointers from the next scene before using them.

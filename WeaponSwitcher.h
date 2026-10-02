@@ -100,7 +100,7 @@ public:
         if(WeaponSwitchPolicy::AcceptInput(foreground==GetCurrentProcessId()&&!gui::IsMenuVisible(),player->isAlive()!=FALSE,scripted,Trigger::StpFlags.STP_OBJ))
         {
             const int current=Pending()<0?Selected():Pending();
-            const unsigned padPress=0; // D-pad belongs to Raiden's native inventory.
+            const unsigned padPress=WeaponSwitchPolicy::PadPress(g_dbPad.m_On, g_dbPad.m_Trig, previousPad); // D-pad belongs to Raiden's native inventory, but can be configured.
             previousPad=(g_dbPad.m_On|g_dbPad.m_Trig)&0xF;
             const int input=WeaponSwitchPolicy::InputSelection(current,prev&&!previousDown,next&&!nextDown,padPress);
             if(input>=0) Select(input);

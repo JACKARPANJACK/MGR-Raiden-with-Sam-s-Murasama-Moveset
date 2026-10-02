@@ -20,6 +20,10 @@ backups/
 *.i64
 *.dmp
 imgui.ini
-/tools
+/tools/*
+!/tools/verify_smg_native.py
+!/tools/test-smg.cmd
 /docs
-/tests
+/tests/*
+!/tests/smg_tests.cpp
+!/tests/kunai_tests.cpp

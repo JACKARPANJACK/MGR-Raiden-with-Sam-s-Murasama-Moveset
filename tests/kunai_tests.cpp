@@ -9,7 +9,7 @@
 int main()
 {
     using namespace KunaiPolicy;
-    assert(Cycle(Native,-1)==Heatblades && Cycle(Heatblades,1)==Native);
+    assert(Cycle(Native,-1)==VectorSmg && Cycle(VectorSmg,1)==Native);
     for(unsigned i=0;i<AimHold;++i) assert(!PrecisionAim(i));
     for(unsigned i=AimHold;i<=VolleyCharge;++i) assert(PrecisionAim(i));
     for (unsigned flags=0;flags<16;++flags)
@@ -169,7 +169,7 @@ int main()
     assert(!CanResume(0,true,false,2)); // give native graph time to enter aim
     assert(!CanResume(0x50,true,false,30)); // grenade recovery must complete
     assert(CanResume(0,true,false,30));
-    for(int variant=Stun;variant<Count;++variant)
+    for(int variant=Stun;variant<VectorSmg;++variant)
     {
         std::array<unsigned char,0x320> original{},shot{};
         for(unsigned i=0;i<original.size();++i) original[i]=static_cast<unsigned char>(i*7+3);

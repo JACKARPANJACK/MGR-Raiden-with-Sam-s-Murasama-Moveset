@@ -6,7 +6,7 @@
 
 namespace KunaiPolicy
 {
-    enum Variant { Native, Stun, Explosive, Heat, Heatblades, Count };
+    enum Variant { Native, Stun, Explosive, Heat, Heatblades, VectorSmg, Count };
     constexpr unsigned Object = 0x30372;
     constexpr unsigned GrenadeObject = 0x31011;
     constexpr unsigned Attack = 0x151;
@@ -154,7 +154,7 @@ namespace KunaiPolicy
     inline bool CanResume(unsigned state, bool alive, bool aiming, unsigned elapsed)
     { return alive && !aiming && elapsed >= 3 && state <= 4; }
     inline bool Matches(unsigned attack, int damage, int variant, bool owned)
-    { return owned && variant > Native && variant < Count && attack == Attack && damage == ImpactDamage(variant); }
+    { return owned && variant > Native && variant < VectorSmg && attack == Attack && damage == ImpactDamage(variant); }
     inline bool TimedDetonation(int variant, unsigned age, bool vanished)
     { return variant == Explosive && age >= 3 && (vanished || age >= 180); }
 }

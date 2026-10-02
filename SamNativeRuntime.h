@@ -179,6 +179,14 @@ public:
     }
 
     bool Owns(Pl0000* player) const { return records.find(player) != records.end(); }
+    BattleParameterImplement* NativeBattleParameters(Pl0000* player) const
+    {
+        if(!player) return nullptr;
+        const auto it=records.find(player);
+        if(it!=records.end() && it->second->active && it->second->raidenParameters)
+            return it->second->raidenParameters;
+        return player->m_pBattleParameterImplement;
+    }
     bool Active(Pl0000* player) const
     {
         const auto it = records.find(player);

@@ -3,6 +3,10 @@
 
 namespace gui
 {
+    struct SmgView {unsigned rounds=0,reload=0,charge=0;bool ready=false,menuLinked=false;};
+    void GetSmgView(SmgView& out);
+    int EquippedSecondary();
+    int PendingSecondary();
     struct KunaiAimView { bool active=false; unsigned frames=0,targets=0,ammo=0,recovery=0; int variant=0; };
     void GetKunaiAimView(KunaiAimView& out);
     bool IsMenuVisible();

@@ -150,11 +150,24 @@ static void RenderSamDebug()
         if(ImGui::Combo("Weapon",&selectedWeapon,weaponNames,7)) gui::SelectWeapon(selectedWeapon);
         ImGui::TextWrapped("Mouse wheel Up / Down or Q / E: previous / next melee weapon. D-pad opens the native inventory, including heatblades. Sam attacks can swap in their final 6 recovery frames. G / Select toggles Sam.");
         if(gui::PendingWeapon()>=0) ImGui::Text("Weapon switch queued...");
-        static const char* kunaiNames[]={"Native inventory subweapon","Stun kunai","Explosive kunai","Heat-blade kunai","Bladewolf heatblades"};
+        static const char* kunaiNames[]={"Native inventory subweapon","Stun kunai","Explosive kunai","Heat-blade kunai","Bladewolf heatblades","Kriss Vector SMG"};
         int selectedKunai=gui::SelectedKunai();
-        if(ImGui::Combo("Subweapon",&selectedKunai,kunaiNames,5)) gui::SelectKunai(selectedKunai);
+        if(ImGui::Combo("Secondary weapon##Subweapon",&selectedKunai,kunaiNames,IM_ARRAYSIZE(kunaiNames))) gui::SelectKunai(selectedKunai);
+        const int equippedSecondary=gui::EquippedSecondary();
+        if(equippedSecondary>=0 && equippedSecondary<IM_ARRAYSIZE(kunaiNames))
+            ImGui::Text("Selected secondary: %s",kunaiNames[equippedSecondary]);
+        if(gui::PendingSecondary()>=0)
+            ImGui::TextWrapped("Selection queued. Close the menu to resume gameplay and equip it.");
+        if(selectedKunai==5)
+        {
+            gui::SmgView smg;gui::GetSmgView(smg);
+            ImGui::Text("SMG: %u / 30 | reload %.1fs | charge %.1fs",smg.rounds,smg.reload/60.0f,smg.charge/60.0f);
+            ImGui::Text("Native secondary menu: %s",smg.menuLinked?"linked":"unavailable on this executable / hook conflict");
+            ImGui::TextWrapped("Close this menu, then press C to fire the selected gun. The gun streams and attaches when gameplay resumes.");
+        }
+        ImGui::TextWrapped("SMG: normal and directional bursts use enemy shooting poses. Heavy + C uses Raiden combo clips. Hold C for 0.5s or longer, then release to dump all 30 rounds into the targeted enemy. A partial magazine reloads first; another reload follows the dump. Normal bullets fire from the gun muzzle. A / D + C: sweep. Air + C: aerial juggle.");
         ImGui::TextWrapped("Hold C / subweapon to precision aim. Tap: selected payload. Release after 0.3s: stun; 0.75s: explosive. Full charge at 1.5s automatically fires up to ten knives in a 90-degree fan, then cooldown. Release C before charging again. Mouse / right stick aims. Air, Blade Mode and combo throws consume one native knife per projectile.");
-        ImGui::TextWrapped("F7 / F8 chooses the tap payload. Every kunai mode uses native knife inventory; normal grenades and RPGs keep their native controls. Cutscenes/QTEs cancel a held charge.");
+        ImGui::TextWrapped("RPG / Stinger: select in the native secondary menu. Tap C to fire on ground or in air; hold then release at 0.5s / 1.5s for 2x / 3x native damage. Uses one native rocket per successful shot. Cutscenes/QTEs, weapon changes and focus loss cancel charge. F7 / F8 chooses the knife / SMG mode.");
         ImGui::TextWrapped("Runtime repair: Sam damage table, 20% faster attacks/Ninja Run, nearby-enemy targeting, timed grab impacts and bounded Round Trip hits.");
         ImGui::TextWrapped("F: Sam sweeping finisher on nearby cyborgs below 25% HP. Native executions, Zandatsu and Blade Mode charge use Sam's DLC controller. Regular hits: 12% electric stun; heavy hits: 25%, with a cooldown.");
         ImGui::Text("Next: %s%s", state.nextUltimate, state.ultimateQueued ? " (QUEUED)" : "");
@@ -166,6 +179,7 @@ static void RenderSamDebug()
 
         ImGui::TextWrapped("Flick + Light: forward rapid slashes, back grab, left sweep, right tackle. Flick + Heavy: forward JCE, back Round Trip, left sonic slash, right leap.");
         ImGui::TextWrapped("Hold direction + Light: forward rapid slashes, back finisher, left sweep, right leap. Hold direction + Heavy: forward charged slash, back stone burst, left sonic slash, right Round Trip.");
+        ImGui::TextWrapped("360 Stick Flick + Heavy: Judgement Cut charge (hold Heavy to charge, release to unleash).");
         static const char* s_moveNames[] = {
             "Raiden thunder slice (pl0010 2400)",
             "Raiden lightning storm (pl0010 3501)",

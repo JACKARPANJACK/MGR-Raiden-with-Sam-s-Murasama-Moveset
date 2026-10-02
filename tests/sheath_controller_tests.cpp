@@ -58,6 +58,11 @@ int main()
     SanitizeCode(buf, sizeof(buf), "pl1400_2101_2_seq.bxm");
     assert(std::strcmp(buf, "2101") == 0);
     assert(std::strcmp(SamSheathPolicy::MotionCode(buf), "3017") == 0);
+
+    SanitizeCode(buf, sizeof(buf), "pl1400_2108.mot");
+    assert(std::strcmp(buf, "2108") == 0);
+    assert(std::strcmp(SamSheathPolicy::MotionCode(buf), "2108") == 0);
+
     // Test 2: Fallback resolution
     assert(std::strcmp(ResolveFallback("0001"), "0000") == 0);
     assert(std::strcmp(ResolveFallback("0002"), "0000") == 0);
@@ -66,17 +71,26 @@ int main()
     assert(std::strcmp(ResolveFallback("3003"), "3010") == 0);
     assert(ResolveFallback("2000") == nullptr);
 
-    // Test 3: Hip attachment bone & clean zero offsets
+    // Test 3: Hip attachment bone & clean zero offsets (Sam native IDA 0x46ECA4)
     ConstraintsStub c{};
-    // Hip attachment (Sam native):
-    c.m_nBone = 0x710;
+    // Hip attachment (Sam native dedicated bone 0x7F0):
+    c.m_nBone = 0x7F0;
     c.m_nRotationBone = 0;
     c.m_vecOffset = { 0.0f, 0.0f, 0.0f, 0.0f };
     c.m_vecRotation = { 0.0f, 0.0f, 0.0f, 0.0f };
-    assert(c.m_nBone == 0x710);
+    assert(c.m_nBone == 0x7F0);
     assert(c.m_nRotationBone == 0);
     assert((c.m_vecOffset == cVec4{ 0.0f, 0.0f, 0.0f, 0.0f }));
     assert((c.m_vecRotation == cVec4{ 0.0f, 0.0f, 0.0f, 0.0f }));
+
+    // Hand attachment (Sam native sequence event 21 left hand bone 0x701, rot bone 10)
+    ConstraintsStub handConstraint{};
+    handConstraint.m_nIndex = 17;
+    handConstraint.m_nBone = 0x701;
+    handConstraint.m_nRotationBone = 10;
+    assert(handConstraint.m_nIndex == 17);
+    assert(handConstraint.m_nBone == 0x701);
+    assert(handConstraint.m_nRotationBone == 10);
 
     // Back restoration (Raiden default):
     c.m_nBone = 0x711;
@@ -88,6 +102,6 @@ int main()
     assert(samSheathModel == 0x11404u);
     assert(raidenSheathModel == 0x10004u);
 
-    std::cout << "PASS: sheath hip attachment (0x710), back restoration (0x711), zero offsets, code sanitization, fallback mappings\n";
+    std::cout << "PASS: sheath hip attachment (0x7F0), hand constraint (0x701), back restoration (0x711), zero offsets, code sanitization, fallback mappings\n";
     return 0;
 }

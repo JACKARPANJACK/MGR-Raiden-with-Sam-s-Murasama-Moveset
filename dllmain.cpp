@@ -8,11 +8,13 @@
 #include "SamMovesetManager.h"
 #include "WeaponSwitcher.h"
 #include "KunaiSubweapon.h"
+#include "NativeSmgMenu.h"
 #include "WeaponSlowMotionFix.h"
 #include "SamDlcRouting.h"
 #include "SamCombatRouting.h"
 #include "gui.h"
 #include <Events.h>
+#include "SamConfig.h"
 #include <intrin.h>
 #include "SamEffectPolicy.h"
 
@@ -59,7 +61,10 @@ int gui::SelectedWeapon() { return WeaponSwitcher::Get().Selected(); }
 int gui::PendingWeapon() { return WeaponSwitcher::Get().Pending(); }
 void gui::SelectWeapon(int index) { WeaponSwitcher::Get().Select(index); }
 int gui::SelectedKunai() { return KunaiSubweapon::Get().Pending()<0 ? KunaiSubweapon::Get().Selected() : KunaiSubweapon::Get().Pending(); }
+int gui::EquippedSecondary() { return KunaiSubweapon::Get().Selected(); }
+int gui::PendingSecondary() { return KunaiSubweapon::Get().Pending(); }
 void gui::GetKunaiAimView(gui::KunaiAimView& out) { KunaiSubweapon::Get().AimView(out); }
+void gui::GetSmgView(gui::SmgView& out) { KunaiSubweapon::Get().SmgView(out); }
 void gui::SelectKunai(int index) { KunaiSubweapon::Get().Select(index); }
 static Behavior* __cdecl ReleaseKunai(Entity* owner, void* descriptor)
 { return KunaiSubweapon::Get().Release(owner,descriptor); }
@@ -151,7 +156,10 @@ static void __fastcall ShutdownExtendedPlayer(Pl0000* player, void*)
     oPlayerShutdown(player);
     SamNativeRuntime::Get().Destroyed(player);
     if (!g_Scene.m_pPlayer || g_Scene.m_pPlayer == player)
+    {
+        KunaiSubweapon::Get().SceneReleased();
         SamResourceManager::Instance().SceneReleased();
+    }
 }
 
 typedef void(__thiscall* Pl0000_HandleActions_t)(Pl0000* pThis);
@@ -280,6 +288,10 @@ static int __fastcall Custom_Behavior_RequestAnimationByName(Behavior* pThis, vo
     request.actor = active ? pThis : nullptr;
     request.mapId = s_animationMapId;
     const bool nativeSam = active && SamNativeRuntime::Get().Active(g_Scene.m_pPlayer);
+    if (active && anim && (std::strstr(anim, "3500") || std::strstr(anim, "3501")))
+    {
+        SamMovesetManager::Instance().TriggerAddon(7);
+    }
     char bladeCode[5]{};
     // Native Sam state nodes also request 4xxx/8xxx/9xxx clips for taunts,
     // finishers and Datsu. Resolve their DLC pair without combat remapping.
@@ -351,6 +363,14 @@ static void __fastcall Custom_Pl0000_HandleActions(Pl0000* pThis, void* edx)
 
     if (oPl0000_HandleActions)
         oPl0000_HandleActions(pThis);
+
+    if (pThis == g_Scene.m_pPlayer && SamMovesetManager::Instance().IsBossEnderActive())
+    {
+        if (pThis->m_Rno0 != SamUltimatePolicy::Action && SamUltimatePolicy::Attack(pThis->m_Rno0))
+        {
+            pThis->setRno(SamUltimatePolicy::Action, 0, 0, 0);
+        }
+    }
 }
 
 // ============================================================================
@@ -395,13 +415,15 @@ static void __cdecl CustomTickGame()
 // ============================================================================
 static void InitHooks()
 {
+    SamConfig::LoadConfig();
     WeaponSlowMotionFix::Install();
     static SafeHook::Hook knifeDefinition((void*)(shared::base+0x54DFD0),
         (void*)NativeKnifeInventory::LookupDefinition,true,(void**)&NativeKnifeInventory::originalDefinition);
     static SafeHook::Hook knifeAlias((void*)(shared::base+0x77F840),
         (void*)NativeKnifeInventory::EquippedAlias,true,(void**)&NativeKnifeInventory::originalEquippedAlias);
-    static SafeHook::Hook knifeDefinitionById((void*)(shared::base+0x54DF20),
+      static SafeHook::Hook knifeDefinitionById((void*)(shared::base+0x54DF20),
         (void*)NativeKnifeInventory::LookupDefinitionById,true,(void**)&NativeKnifeInventory::originalDefinitionById);
+    NativeSmgMenu::Install();
     // Native 7A4410 grenade throw release, after its ammo consumption and aim.
     if(KunaiSubweapon::Get().Install()) injector::MakeCALL(shared::base+0x7A4883,ReleaseKunai);
     // Hard reset the opt-in state

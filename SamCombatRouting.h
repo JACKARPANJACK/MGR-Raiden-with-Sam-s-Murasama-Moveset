@@ -18,7 +18,8 @@ namespace SamCombatRouting
 
     inline bool IsCombatCode(const char* code)
     {
-        if (!code || std::strlen(code) < 4 || code[0] != '2') return false;
+        if (!code || std::strlen(code) < 4) return false;
+        if (code[0] != '2' && std::strncmp(code, "350", 3) != 0) return false;
         for (int i = 1; i < 4; ++i)
             if (!((code[i] >= '0' && code[i] <= '9') ||
                   (code[i] >= 'a' && code[i] <= 'f'))) return false;
@@ -32,6 +33,9 @@ namespace SamCombatRouting
     {
         struct Pair { const char* raiden; const char* sam; };
         static constexpr Pair pairs[] = {
+            // Stormbringer (360 spin + heavy) -> Judgement Cut
+            {"3500", "92e0"}, {"3501", "92e4"}, {"3502", "92e4"},
+
             // Ground Light Attack String & branches
             {"2100", "2000"}, {"2101", "2001"}, {"2102", "2002"}, {"2103", "2003"},
             {"2108", "2003"},

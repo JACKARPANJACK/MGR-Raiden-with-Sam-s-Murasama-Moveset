@@ -29,6 +29,8 @@ namespace SamBossSequence
         // Native playable Sam entries: light 4/6/8, finisher 10,
         // heavy 12, charged draw 26. Preserve telegraphs as non-hits.
         if (!std::strcmp(code, "2200") || !std::strcmp(code, "2220")) return 4;
+        if (!std::strcmp(code, "9100") || !std::strcmp(code, "9101") || !std::strcmp(code, "9102")) return 4;
+        if (!std::strcmp(code, "9108")) return 12;
         if (!std::strcmp(code, "92e4")) return bossNumber == 14 ? 26 : 4;
         if (!std::strcmp(code, "2600") || !std::strcmp(code, "2610")) return 10;
         if (!std::strcmp(code, "3004") || !std::strcmp(code, "3024") ||

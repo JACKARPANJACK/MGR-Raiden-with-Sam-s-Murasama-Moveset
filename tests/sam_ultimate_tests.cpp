@@ -43,10 +43,14 @@ int main()
     for (const auto& move : Moves) for (const char* code : {move.windup, move.release})
     {
         if (!code) continue;
-        std::string base = std::string(move.raiden ? "local_assets/data000/pl/pl0010.dat.unpacked/pl0010_" :
-            "local_assets/data000/em/em0020.dat.unpacked/em0020_") + code;
+        std::string base = move.raiden ?
+            "local_assets/data000/pl/pl0010.dat.unpacked/pl0010_" + std::string(code) :
+            (std::ifstream("local_assets/data000/em/em0020.dat.unpacked/em0020_" + std::string(code) + ".mot", std::ios::binary).good() ?
+             "local_assets/data000/em/em0020.dat.unpacked/em0020_" + std::string(code) :
+             "local_assets/data107/pl/pl1400.dat.unpacked/pl1400_" + std::string(code));
         assert(std::ifstream(base + ".mot", std::ios::binary).good());
         std::ifstream file(base + "_0_seq.bxm", std::ios::binary);
+        if (!file.good()) file.open(base + "_2_seq.bxm", std::ios::binary);
         std::vector<uint8_t> source((std::istreambuf_iterator<char>(file)), {});
         assert(!source.empty());
         const auto original = source;
@@ -102,7 +106,8 @@ int main()
                         unsigned actual = unsigned(std::strtoul(str(U16(entry+2)), nullptr, 10));
                         unsigned expected = move.raiden ? originalNo : originalNo == 0 ? 0 : AttackNumber(code, originalNo);
                         assert(actual == expected);
-                        if (!std::strcmp(code,"2220")) assert(actual == 0 || actual == 4);
+                        if (!std::strcmp(code,"2220") || !std::strcmp(code,"9100")) assert(actual == 0 || actual == 4);
+                        if (!std::strcmp(code,"9108")) assert(actual == 0 || actual == 12);
                         if (!std::strcmp(code,"3004")) assert(actual == 0 || actual == 26);
                     }
                 }

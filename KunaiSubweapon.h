@@ -3,6 +3,8 @@
 #include "SamMovesetManager.h"
 #include "SamElectricCombat.h"
 #include "NativeKnifeInventory.h"
+#include "SmgSubweapon.h"
+#include "NativeLauncherSubweapon.h"
 #include <PlayerManagerImplement.h>
 #include <atomic>
 #include <array>
@@ -41,6 +43,8 @@ class KunaiSubweapon
     std::vector<Burn> burns;
     std::vector<BeforeHit> beforeHits;
     SamElectricCombat electric;
+    SmgSubweapon smg;
+    NativeLauncherSubweapon launchers;
     std::atomic<int> selected{0}, pending{-1};
     Pl0000* owner=nullptr;
     int previousSlot=0;
@@ -238,6 +242,7 @@ class KunaiSubweapon
         }
     }
 public:
+    void SmgView(gui::SmgView& out) const {smg.View(out);out.menuLinked=NativeKnifeInventory::smgMenuReady;}
     void AimView(gui::KunaiAimView& out) const
     { out.active=aimVisible.load();out.frames=aimFrames.load();out.targets=aimTargets.load();out.ammo=aimAmmo.load();out.recovery=aimRecovery.load();out.variant=Selected(); }
     static KunaiSubweapon& Get() { static KunaiSubweapon instance; return instance; }
@@ -252,6 +257,8 @@ public:
     int Pending() const { return pending.load(); }
     void RestoreInputs()
     {
+        smg.RestoreInputs();
+        launchers.RestoreInputs();
         if (!throwReserved) return;
         g_dbPad.m_On=(g_dbPad.m_On&~throwMask)|throwOn;
         g_dbPad.m_Trig=(g_dbPad.m_Trig&~throwMask)|throwTrig;
@@ -317,6 +324,12 @@ public:
     {
         if(owner!=player) return;
         RestoreInputs();
+        smg.Forget(player);
+        launchers.Forget(player);
+        // The synthetic slot is scene-owned; never leave it to an unhooked player.
+        if(NativeKnifeInventory::raidenScene && g_pPlayerManager &&
+            g_pPlayerManager->getSubWeaponEquipped()==NativeSmgMenuPolicy::Slot)
+            g_pPlayerManager->setSubWeaponEquipped(0);
         electric.Reset(); burns.clear(); beforeHits.clear();
         SamMovesetManager::Instance().SetSubweaponActive(false);
         shots.clear();
@@ -324,6 +337,7 @@ public:
         charge.Cancel(false);releases.clear();heldAimValid=false;aimVisible=false;aimFrames=aimTargets=aimAmmo=aimRecovery=0;
         NativeKnifeInventory::raidenScene=false;
     }
+    void SceneReleased() {smg.SceneReleased();launchers.SceneReleased();}
     void Tick(Pl0000* player)
     {
         if(owner!=player) {if(owner) Forget(owner); owner=player;}
@@ -331,6 +345,7 @@ public:
         if(!SamNativeRuntime::Get().Owns(player)) { Forget(player);return; }
         NativeKnifeInventory::raidenScene=SamNativeRuntime::Get().Owns(player);
         NativeKnifeInventory::Ensure();
+        NativeKnifeInventory::EnsureSmg();
         beforeHits.clear();
         GuideShots(player);
         if(Selected()!=0 || !shots.empty())
@@ -354,23 +369,40 @@ public:
         wasPrevious=previous; wasNext=next;
         // Every kunai payload uses the genuine knife item, including menu modes.
         const int slot=g_pPlayerManager->getSubWeaponEquipped();
-        if(slot==NativeKnifeInventory::Slot)
-        { if(Selected()==KunaiPolicy::Native) selected=KunaiPolicy::Heatblades; }
+        if(slot==NativeSmgMenuPolicy::Slot && NativeKnifeInventory::smgMenuReady)
+            selected=KunaiPolicy::VectorSmg;
+        else if(slot==NativeKnifeInventory::Slot)
+        { if(Selected()==KunaiPolicy::Native || Selected()==KunaiPolicy::VectorSmg) selected=KunaiPolicy::Heatblades; }
         else { selected=KunaiPolicy::Native; previousSlot=slot; }
         const int choice=Pending();
         if(choice>=0 && EncounterPolicy::CanThrow(player->m_Rno0,player->isAlive()!=FALSE,
             player->isInAir()!=FALSE,Blocked(),player->isBladeModeActive()!=FALSE))
         {
-            if(choice!=KunaiPolicy::Native)
+            if(choice==KunaiPolicy::VectorSmg)
+            {
+                if(!NativeKnifeInventory::EnsureSmg()) return;
+                if(slot!=NativeKnifeInventory::Slot && slot!=NativeSmgMenuPolicy::Slot) previousSlot=slot;
+                g_pPlayerManager->setSubWeaponEquipped(NativeSmgMenuPolicy::Slot);
+            }
+            else if(choice!=KunaiPolicy::Native)
             {
                 if(!NativeKnifeInventory::Ensure() || !SamResourceManager::Instance().HeatbladesReady()) return;
-                if(slot!=NativeKnifeInventory::Slot) previousSlot=slot;
+                if(slot!=NativeKnifeInventory::Slot && slot!=NativeSmgMenuPolicy::Slot) previousSlot=slot;
                 g_pPlayerManager->setSubWeaponEquipped(NativeKnifeInventory::Slot);
             }
-            else if(slot==NativeKnifeInventory::Slot)
-                g_pPlayerManager->setSubWeaponEquipped(previousSlot==NativeKnifeInventory::Slot ? 0 : previousSlot);
+            else if(slot==NativeKnifeInventory::Slot || slot==NativeSmgMenuPolicy::Slot)
+                g_pPlayerManager->setSubWeaponEquipped(
+                    previousSlot==NativeKnifeInventory::Slot || previousSlot==NativeSmgMenuPolicy::Slot ? 0 : previousSlot);
             if(choice!=Selected()) {charge.Cancel(true);releases.clear();heldAimValid=false;aimLatched=false;}
             selected=choice; pending=-1;
+        }
+        smg.Tick(player,Selected()==KunaiPolicy::VectorSmg);
+        launchers.Tick(player,g_pPlayerManager->getSubWeaponEquipped());
+        if(Selected()==KunaiPolicy::VectorSmg)
+        {
+            charge.Cancel(true);releases.clear();heldAimValid=false;aimVisible=false;
+            TickThrowPose(player,false,false);
+            return;
         }
         burst.Tick(!Blocked());
         const unsigned button=player->m_ButtonUseSubweapon;
@@ -474,6 +506,7 @@ public:
     }
     void PostTick(Pl0000* player)
     {
+        smg.PostTick(player);
         if(owner!=player || !player || !player->m_pEntity || Blocked()) return;
         electric.Tick(player,false,false,false,false);
         for(auto& shot:shots) if(Entity* projectile=shot->projectile.getEntity()) shot->position=projectile->getTransPos();
