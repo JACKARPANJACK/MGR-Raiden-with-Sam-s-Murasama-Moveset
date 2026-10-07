@@ -7,7 +7,8 @@
 
 // Clone boss timing/visual/audio tracks, adapting hits to Sam's player attack
 // table. The archive remains immutable. Enemy flags and other actor-specific
-// tracks cannot run on a player. Copies must outlive animation slots.
+// tracks cannot run on a player; playable Sam retains only sheath flags.
+// Copies must outlive animation slots.
 namespace SamBossSequence
 {
     inline unsigned U16(const uint8_t* p) { return (p[0] << 8) | p[1]; }
@@ -94,7 +95,7 @@ namespace SamBossSequence
         }
         return out;
     }
-    inline std::vector<uint8_t> Adapt(const void* data, size_t available, const char* code = nullptr, bool raiden = false)
+    inline std::vector<uint8_t> Adapt(const void* data, size_t available, const char* code = nullptr, bool raiden = false, bool playableSheath = false)
     {
         if (!data || available < 16) return {};
         size_t size = Size(data);
@@ -110,6 +111,7 @@ namespace SamBossSequence
             return offset;
         };
         unsigned zero = append("0"), always = append("4294967295");
+        unsigned sheathFlag = append("2097152"); // flag 21 in each 32-bit bank
         unsigned attackOffsets[27]{};
         for (unsigned n : {4u, 10u, 12u, 26u})
         {
@@ -128,9 +130,10 @@ namespace SamBossSequence
             if (index + attrs >= pairs || first + children > nodes) return {};
             const char* tag = str(U16(src + pairStart + index * 4));
             bool attack = !std::strcmp(tag, "AttackTrack");
+            const bool sheathFlags = playableSheath && !std::strcmp(tag, "FlagsTrack");
             bool retain = attack || !std::strcmp(tag, "SeqRoot") || !std::strcmp(tag, "Seq") ||
                 !std::strcmp(tag, "EffectTrack") || !std::strcmp(tag, "SeTrack") ||
-                !std::strcmp(tag, "VibTrack") || !std::strcmp(tag, "SpeedTrack");
+                !std::strcmp(tag, "VibTrack") || !std::strcmp(tag, "SpeedTrack") || sheathFlags;
             if (!retain)
             {
                 W16(node, 0);
@@ -138,10 +141,34 @@ namespace SamBossSequence
                     if (!std::strcmp(str(U16(src + pairStart + (index + a) * 4)), "SeqNum"))
                         W16(out.data() + pairStart + (index + a) * 4 + 2, zero);
             }
+            if (sheathFlags)
+            {
+                // Only playable Sam uses these bits for hand grip (21) and
+                // sword parking (53). Keep their authored time windows, while
+                // excluding action transitions and every other sequence flag.
+                for (unsigned c = first; c < first + children; ++c)
+                {
+                    const auto* child = src + 16 + c * 8;
+                    unsigned ci = U16(child + 6), ca = U16(child + 4);
+                    if (ci + ca >= pairs) return {};
+                    for (unsigned a = 1; a <= ca; ++a)
+                    {
+                        const auto* entry = src + pairStart + (ci + a) * 4;
+                        const char* name = str(U16(entry));
+                        if (!std::strcmp(name, "Flag0") || !std::strcmp(name, "Flag1"))
+                        {
+                            const unsigned flags = unsigned(std::strtoul(str(U16(entry + 2)), nullptr, 10));
+                            W16(out.data() + pairStart + (ci + a) * 4 + 2,
+                                (flags & (1u << 21)) ? sheathFlag : zero);
+                        }
+                    }
+                }
+            }
             const bool effect = !std::strcmp(tag,"EffectTrack");
             // Raiden's own hit numbers, layer gates, audio and effects remain
-            // native. Flags belonging to his action graph are excluded above
-            // because the addon owns its duration and state transitions.
+            // native. Action graph flags are excluded because the addon owns
+            // its duration and transitions; playable Sam's sheath flags above
+            // retain their original grip and sword-parking windows.
             if (raiden || (!attack && !effect)) continue;
             for (unsigned c = first; c < first + children; ++c)
             {

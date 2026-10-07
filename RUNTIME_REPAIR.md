@@ -1,6 +1,174 @@
 # Runtime repair, October 1, 2026
 
-## Current build: encounter and heatblade repair
+## October 3: complete effect bank routes and Sam Zandatsu
+
+Generated SamEffectBanks.h from the local EFF headers: all 337 playable Sam,
+93 boss Sam and 286 core effect IDs are available to native helper routing.
+The previous playable table covered 176 IDs; 161 were missing and could fall
+back to Raiden's model bank. Sam helpers now prefer pl1400 on overlapping IDs.
+Boss EffectTrack references still use their explicit em0020 bank. Activation
+waits for both Sam banks to register, preventing attacks from starting before
+boss effects finish streaming.
+
+Native Zandatsu state 0x100059 (native predicate RVA 0x6C3910) now retains the
+Sam graph through combat QTE just like human/mech executions. Its DLC sequence
+chain remains selected after leaving Blade Mode. Some shared execution/Datsu
+motions are intentionally absent from pl1400; those use the verified shared
+MOT with Sam's authored sequence, as native DLC does.
+
+Validation: 716 complete bank entries, 35 runtime sequence adapters, human/mech
+execution and Zandatsu handoff guards, all 16 suites, and Win32 Release build.
+Live effect appearance and paired animation completion remain unverified.
+
+## October 3: native Sam execution QTE preservation
+
+The blanket QTE safety handoff destroyed Sam's state graph during native human
+and mech executions. EncounterPolicy now distinguishes SDK states 0x100066
+and 0x100067 from campaign story QTEs. Those two combat QTEs keep Sam's
+controller, animation map, effect routing and sheath management; event, codec
+and soft-event flags still require a campaign handoff. No forced target
+teleports, instant-kill substitutes or replacement enemy state graphs added.
+
+Compared the local Sam-to-Raiden reference route at vtable slot 0x150
+(campaign interaction dispatcher 0x7F5690), which the current per-player table
+already inherits. Added checks for both execution states, retained story
+handoffs, blocked addon throws, and all seven shared execution motion routes.
+The existing fixture checks verify the shared Raiden MOT / Sam DLC sequence
+pairs. Paired enemy positioning and prompt timing remain unverified in-game.
+
+## October 3: charge and attack effect coverage
+
+Imported charged, sonic, stone and Judgement Cut windups use Sam's native
+charge start (117), mature glow (118) and release flash (119). The mature glow
+starts once after 45 animation frames, or halfway through shorter windups.
+Release fades the windup controller before emitting the flash; interruption
+only fades, so damage/cutscene transitions do not emit a false release.
+Sonic slash's 3010 windup was missing from the charge effect path.
+
+Extended the effect audit to all rapid follow-up stages and Raiden specials
+using their actual adapters. Checked 35 adapted sequences, 262 sequence effect
+references and 484 native helper bank routes against local EFF headers. No
+missing assets in executable mod sequences; 28 engine alias references remain
+dependent on native alias resolution. All 16 suites and Win32 Release build
+passed. In-game appearance remains unverified.
+
+## October 3: stretched body and attack grip correction
+
+The prior hand-grip binding reversed the entities in constraint 17, attaching
+Raiden's body to the sheath. Rechecked the executable at RVA 0x478EA0-0x478EBE:
+x86 pushes rotation 10, bone 0x701, sheath, player entity, and ID 17, in that
+order. The SDK signature therefore requires the player as attachment parent
+and the sheath as attached object. Corrected both the binding and the existing
+constraint identity check; hand offsets remain native zero values.
+
+Playable rapid/spinning slash sequence adaptation had also removed FlagsTrack,
+including the authored grip windows. It now retains only flag 21 (hand grip)
+and flag 53 (sword parking), with original timing. Other sequence flags remain
+filtered, and boss/Raiden sequence adaptation keeps its previous behavior.
+Management still runs through 1-GameFileFlagCheck.h.
+
+Validation: native executable call order and SDK signature, all 16 regression
+suites including all four rapid stages' flag masking/timing, and Win32 Release
+build. Live gameplay and the screenshot pose remain unverified.
+
+## Current update: actual sheath texture crash repair
+
+The latest session logs repeat access violations in d3dx9_43.dll+0xDA849,
+whose instruction probes the image buffer header. Installed RaidenRemaster
+pl1404.wta advertised 5,776,286-byte and 5,587,078-byte textures, with the
+second at offset 5,779,456. Its paired WTP is only 701,952 bytes and exactly
+matches stock data107. This was an invalid mod DAT/DTT pairing, not evidence
+that the existing 0x7F0 hip offset needed changing.
+
+Backed up pl1404.dat and replaced only pl1404.wta with the original data107
+table. Both entries now fit and have DDS headers; all other archive members
+remain byte-identical. Installed pl1404.wmb also exactly matches stock Sam.
+Verified the active pl1010 body's 0x7F0 rest transform and parent against Sam.
+The runtime now uses the native Sam_Sheath entity name (RVA 0x46EC82 string),
+logs successful attachment, and stops per-frame retries after a swap fault.
+
+Repair command: python tools/repair_sheath_textures.py GAME_DIRECTORY --install.
+The script requires byte-identical stock WTP before applying a stock table,
+backs up before writing, and refuses installation while the game runs.
+
+Validation: Release build, sheath/toggle/Round Trip suites, reproduction of
+rejected original texture bounds, repaired DDS ranges, preserved model/archive
+members, and installed costume bone check. No live gameplay verification yet.
+
+## Current update: player-local temporary Sam sheath swap
+
+Removed active-mode global costume-table writes. Activation swaps the live
+player entity to pl1404, preserving the original costume sheath entity, model
+ID and constraint 3 bone/rotation/offsets. Each active update checks the entity
+and mount identity, retries unloaded/failed Sam creation, and hides the retained
+original. The original stays at its native mount while Sam's resources load.
+Repeated activations recapture the restored mount rather than a Sam fallback.
+Deactivation, weapon changes and native story suspension restore the captured
+Raiden sheath; scene reconstruction does not inherit a patched costume table.
+Animation and grip flags remain managed through 1-GameFileFlagCheck.h.
+
+Validation: Win32 Release build plus sheath, toggle and Round Trip regressions.
+Live visual swapping/costume transitions remain unverified in-game.
+
+## Current update: sprint priority, move configuration and Sai pull
+
+Ninja Run input and native Sam dash/run attack/charge states suppress and clear
+buffered directional add-ons. Walking retains all sixteen directional inputs.
+Unsupported/air/Blade Mode contexts reset the gesture buffer. Corrected the
+supplied INI to all nineteen catalog entries, sixteen unique mappings, and
+playable rapid stages 9100/9101/9102/9108. The loader supports Playable/Followups
+and rejects out-of-range directional and ultimate indices.
+
+Added F/L3-alone Sai pull while Raiden's Sai is selected. The native action
+hook receives a heavy trigger; after twelve ticks the nearest eligible cyborg
+within fifteen units is pulled horizontally toward Raiden for at most thirty-six
+ticks, stopping at 1.5 units. An actor-local speed unit is restored on completion,
+weapon change, unsupported state, air/Blade Mode, scripted action, death or
+shutdown. em0170 heavy hammer cyborgs, bosses, robots and body parts are excluded.
+No extra damage is injected. Movement uses the engine character controller but
+navigation/obstacle behavior needs gameplay verification.
+
+SAM_MOVELIST.md documents native, sprint, directional, ultimate, Round Trip and
+Sai inputs. Validation: Release Win32 build and sixteen suites, including actual
+INI loading, all sixteen gesture paths, sprint policy and Sai exclusions/limits.
+Live combat, controller timing and pull appearance remain unverified in-game.
+
+## Current update: file flag sheath management
+
+SheathController delegates flags 53 (blade parking), 21 (grip attachment),
+QTE sheath map selection, and direct/polled sheath animations to BxmFlagHandle
+in 1-GameFileFlagCheck.h. Its animation cache resets on player/sheath changes
+and toggle-off. Removed unrelated native weapon/effect tick calls from these
+helpers. Round Trip skips sheath management while the sword is in flight.
+Corrected flag 21's identical branches and reversed grip attachment.
+
+Validation: Release Win32 build and sheath/Round Trip regression suites.
+Visual appearance and sequence-flag transitions require an in-game check.
+
+## Current update: sheath grip and distinct directional attacks, October 3, 2026
+
+Corrected constraint 17 to match native RVA 0x478EA0-0x478EBE: the
+scabbard is the attachment parent and the player is the constrained object.
+The scabbard grip marker supplies bone 0x701 and rotation bone 10, with zero
+additional offset/rotation. Constraint 3 retains the hip mount at 0x7F0.
+Grip constraints are checked for entity identity and repaired after native
+rebinding. The retained original sheath is hidden each active update to
+prevent native visibility changes from displaying two scabbards.
+
+All sixteen direction/button/held-or-flick combinations now select distinct
+moves and release clips. See DIRECTIONAL_MOVES.md for controls. Forward flick
+plus Light restores the full playable Sam rapid/spinning sequence:
+pl1400_9100 -> 9101 -> 9102 -> 9108. These stages explicitly use the playable
+archive, preserve its native attack IDs/effects, and preflight all four pairs
+before starting. Each stage advances at its MOT duration. X specials remain
+separate from directional inputs.
+
+Validation: Win32 Release build and fourteen regression suites, including
+32 catalog stages, sixteen distinct input mappings, four rapid clips with
+native hit numbers, and the shared grip binder tested with engine doubles.
+Visual sheath alignment and attack appearance remain unverified in-game.
+
+## Previous build: encounter and heatblade repair
 
 Diagnosis from process 23312's October 1, 16:17 crash dump: native RVA 67C8A0
 reads address 0x48 with ECX=0, called at 7BD989 during sword construction.

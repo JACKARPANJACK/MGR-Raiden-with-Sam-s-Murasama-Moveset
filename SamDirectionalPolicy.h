@@ -3,6 +3,11 @@
 
 namespace SamDirectionalPolicy
 {
+    inline bool NativeSprint(unsigned action, bool runHeld)
+    {
+        return runHeld || action == 0x100008 || action == 0x100009 ||
+            action == 0x100014 || action == 0x100015 || action == 0x100016;
+    }
     enum Direction { None, Forward, Back, Left, Right };
     inline Direction Resolve(float x, float y)
     {
@@ -11,8 +16,8 @@ namespace SamDirectionalPolicy
         return x < 0 ? Left : Right;
     }
     // Indices into the shared stage catalog, excluded from the X ultimate set.
-    inline int heldLight[] = {-1, 5, 3, 6, 4};
-    inline int heldHeavy[] = {-1, 1, 0, 2, 12};
+    inline int heldLight[] = {-1, 14, 3, 16, 17};
+    inline int heldHeavy[] = {-1, 1, 0, 15, 18};
     inline int flickLight[] = {-1, 5, 10, 6, 11};
     inline int flickHeavy[] = {-1, 7, 12, 2, 4};
     inline int Move(Direction direction, bool heavy, bool flick)

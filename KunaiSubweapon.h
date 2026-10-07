@@ -30,6 +30,8 @@ class KunaiSubweapon
         EntityHandle target;
         bool homing=false;
         unsigned homingDelay=0;
+        bool lockOnTarget=false;
+        Hw::cVec4 lockTargetPos{};
         ~Shot()
         {
             if (Entity* live=projectile.getEntity()) live->release();
@@ -74,6 +76,57 @@ class KunaiSubweapon
     std::atomic<unsigned> aimFrames{0},aimTargets{0},aimAmmo{0},aimRecovery{0};
     std::atomic<bool> aimVisible{false};
     static constexpr unsigned ThrowKey=1u<<('C'%32);
+
+    struct LockTargetInfo
+    {
+        bool hasLock = false;
+        Entity* enemy = nullptr;
+        Hw::cVec4 position{};
+    };
+
+    static LockTargetInfo GetLockOnTargetInfo(Pl0000* player)
+    {
+        LockTargetInfo info{};
+        if (g_GameCamera.m_LockonSystem.m_nLockType != 0)
+        {
+            Entity* targetEnt = g_GameCamera.m_LockonSystem.m_TargetEntity.getEntity();
+            if (!targetEnt && g_GameCamera.m_LockonSystem.m_pTarget)
+                targetEnt = g_GameCamera.m_LockonSystem.m_pTarget->m_pEntity;
+            
+            if (targetEnt && SamTargets::Enemy(targetEnt))
+            {
+                info.hasLock = true;
+                info.enemy = targetEnt;
+                const auto& lpos = g_GameCamera.m_LockonSystem.m_vecPosition;
+                if (std::isfinite(lpos.x) && std::isfinite(lpos.y) && std::isfinite(lpos.z) &&
+                    (lpos.x != 0.0f || lpos.y != 0.0f || lpos.z != 0.0f))
+                {
+                    info.position = lpos;
+                }
+                else
+                {
+                    Hw::cVec4 p = targetEnt->getTransPos();
+                    p.y += 0.8f;
+                    info.position = p;
+                }
+                return info;
+            }
+        }
+        if (player)
+        {
+            Entity* zTarget = player->field_1370.m_TargetHandle.getEntity();
+            if (zTarget && SamTargets::Enemy(zTarget))
+            {
+                info.hasLock = true;
+                info.enemy = zTarget;
+                Hw::cVec4 p = zTarget->getTransPos();
+                p.y += 0.8f;
+                info.position = p;
+                return info;
+            }
+        }
+        return info;
+    }
 
     static bool Blocked()
     { return Trigger::StpFlags.STP_OBJ || g_StaFlags.STA_QTE || g_StaFlags.STA_EVENT || g_StaFlags.STA_CODEC || g_StaFlags.STA_SOFT_EVENT; }
@@ -183,6 +236,7 @@ class KunaiSubweapon
     void GuideShots(Pl0000* player)
     {
         if(Blocked() || !player->isAlive()) return;
+        const auto currentLock = GetLockOnTargetInfo(player);
         for(auto& shot:shots)
         {
             if(!shot->homing || shot->spent || shot->fade || shot->age<shot->homingDelay ||
@@ -195,15 +249,47 @@ class KunaiSubweapon
             Entity* target=shot->target.getEntity();
             if(!SamTargets::Enemy(target) || DistanceSquared(position,target->getTransPos())>3600)
             {
-                target=AcquireTargets(position,KunaiPolicy::Unit(current),0.6f)[0];
-                shot->target=target;
+                if (currentLock.hasLock)
+                {
+                    target = currentLock.enemy;
+                    shot->target = target;
+                    shot->lockOnTarget = true;
+                    shot->lockTargetPos = currentLock.position;
+                }
+                else
+                {
+                    target=AcquireTargets(position,KunaiPolicy::Unit(current),0.6f)[0];
+                    shot->target=target;
+                }
             }
             if(!target) continue;
-            const auto p=target->getTransPos();
-            const auto steered=KunaiPolicy::Steer(current,{p.x-position.x,p.y+0.8f-position.y,p.z-position.z});
-            // Native BulletBase velocity, verified at 6D054B and 6D03BE.
-            // Native physics still advances the projectile and checks walls/hits.
+
+            Hw::cVec4 aimPos = target->getTransPos();
+            aimPos.y += 0.8f;
+
+            if (shot->lockOnTarget)
+            {
+                if (currentLock.hasLock && currentLock.enemy == target)
+                {
+                    aimPos = currentLock.position;
+                    shot->lockTargetPos = currentLock.position;
+                }
+                else if (shot->lockTargetPos.x != 0.0f || shot->lockTargetPos.y != 0.0f || shot->lockTargetPos.z != 0.0f)
+                {
+                    aimPos = shot->lockTargetPos;
+                }
+            }
+
+            const auto steered = shot->lockOnTarget
+                ? KunaiPolicy::SteerPrecision(current, {aimPos.x - position.x, aimPos.y - position.y, aimPos.z - position.z}, 0.50f)
+                : KunaiPolicy::Steer(current, {aimPos.x - position.x, aimPos.y - position.y, aimPos.z - position.z});
+
             velocity->x=steered.x;velocity->y=steered.y;velocity->z=steered.z;
+
+            if (shot->lockOnTarget && DistanceSquared(position, aimPos) < 0.25f)
+            {
+                Impact(player, target, *shot);
+            }
         }
     }
     void Detonate(Shot& shot)
@@ -228,7 +314,8 @@ class KunaiSubweapon
     void Impact(Pl0000* player, Entity* target, Shot& shot)
     {
         if (shot.spent) return;
-        shot.position=target->getTransPos();
+        shot.position = (shot.lockOnTarget && (shot.lockTargetPos.x != 0.0f || shot.lockTargetPos.y != 0.0f || shot.lockTargetPos.z != 0.0f))
+            ? shot.lockTargetPos : target->getTransPos();
         if (shot.variant==KunaiPolicy::Explosive) { Detonate(shot); return; }
         shot.spent=true;
         if (shot.variant==KunaiPolicy::Stun) electric.Stun(player,target,90);
@@ -294,12 +381,26 @@ public:
         if (!category) return false;
         *reinterpret_cast<unsigned*>(data+0x170)=*category;
         const auto pos=player->m_pEntity->getTransPos();
+
+        const auto lockInfo = GetLockOnTargetInfo(player);
+        const bool isLockOnTarget = lockInfo.hasLock && (enemy == lockInfo.enemy || !enemy || !precision);
+
+        Hw::cVec4 target = aimPoint;
+        if (isLockOnTarget)
+        {
+            target = lockInfo.position;
+            enemy = lockInfo.enemy;
+            const float toX = target.x - pos.x, toY = (target.y - 0.8f) - (pos.y + 1.1f), toZ = target.z - pos.z;
+            direction = KunaiPolicy::Unit({toX, toY, toZ});
+        }
+        else if(!precision && SamTargets::Enemy(enemy))
+        {
+            target = enemy->getTransPos();
+            target.y += 0.8f;
+        }
+
         const float dx=direction.x,dz=direction.z;
         Hw::cVec4 origin(pos.x+dx*0.65f,pos.y+1.1f,pos.z+dz*0.65f,1);
-        Hw::cVec4 target=aimPoint;
-        if(!precision && SamTargets::Enemy(enemy)) {target=enemy->getTransPos();target.y+=0.8f;}
-        // Aim convergence comes from the raised screen ray, never a chest snap.
-        // Charged homing may steer to its weak target after the native launch.
         const float tx=target.x-origin.x,ty=target.y-origin.y,tz=target.z-origin.z;
         Hw::cVec4 rotation(-std::atan2(ty,std::sqrt(tx*tx+tz*tz)),std::atan2(tx,tz)+spread,0,0);
         using Trajectory=void(__thiscall*)(void*,Hw::cVec4*,Hw::cVec4*,Hw::cVec4*,float,float);
@@ -312,7 +413,10 @@ public:
         *reinterpret_cast<float*>(bytes+0xBFC)=0.3f;
         auto shot=std::make_unique<Shot>();shot->projectile=projectile->m_pEntity;
         shot->position=origin;shot->variant=variant;shot->grenade=descriptor;
-        shot->target=enemy;shot->homing=homing;
+        shot->target=enemy;
+        shot->homing=homing || isLockOnTarget;
+        shot->lockOnTarget=isLockOnTarget;
+        shot->lockTargetPos=target;
         shot->homingDelay=spread!=0 ? KunaiPolicy::FanHomingDelay : 0;
         if(variant==KunaiPolicy::Stun) SamElectricCombat::Lightning(player,projectile->m_pEntity,&shot->visual);
         shots.push_back(std::move(shot));
@@ -417,21 +521,43 @@ public:
         const bool release=eligible && !Trigger::StpFlags.STP_OBJ && charge.Tick(throwDown,true,true);
         if(eligible && throwDown && KunaiPolicy::PrecisionAim(charge.frames)) aimLatched=true;
         const bool precisionAim=KunaiPolicy::PrecisionAim(charge.frames) || aimLatched;
+        const auto lockInfo = GetLockOnTargetInfo(player);
         Hw::cVec4 cameraPosition=player->m_pEntity->getTransPos();cameraPosition.y+=1.1f;
         KunaiPolicy::Vector direction{std::sin(player->m_Rot.y),0,std::cos(player->m_Rot.y)};
         const bool validAim=!precisionAim || ReticleRay(cameraPosition,direction);
-        const auto precision=validAim ? AcquireTargets(cameraPosition,direction,precisionAim?0.995f:0.6f) : std::array<Entity*,3>{};
+        auto precision=validAim ? AcquireTargets(cameraPosition,direction,precisionAim?0.995f:0.6f) : std::array<Entity*,3>{};
         float depth=60;
-        if(Entity* target=precision[0])
+        if (lockInfo.hasLock && !precisionAim)
+        {
+            precision[0] = lockInfo.enemy;
+            const float toX = lockInfo.position.x - cameraPosition.x;
+            const float toY = lockInfo.position.y - cameraPosition.y;
+            const float toZ = lockInfo.position.z - cameraPosition.z;
+            direction = KunaiPolicy::Unit({toX, toY, toZ});
+            depth = KunaiPolicy::AimDepth({toX, toY, toZ}, direction);
+        }
+        else if(Entity* target=precision[0])
         {
             const auto p=target->getTransPos();
             depth=KunaiPolicy::AimDepth({p.x-cameraPosition.x,p.y+0.8f-cameraPosition.y,p.z-cameraPosition.z},direction);
         }
         Hw::cVec4 aimPoint(cameraPosition.x+direction.x*depth,cameraPosition.y+direction.y*depth,
             cameraPosition.z+direction.z*depth,1);
-        if(!precisionAim && precision[0]) {aimPoint=precision[0]->getTransPos();aimPoint.y+=0.8f;}
-        const auto locks=validAim && charge.frames>=KunaiPolicy::VolleyCharge ?
+        if (lockInfo.hasLock && !precisionAim)
+        {
+            aimPoint = lockInfo.position;
+        }
+        else if(!precisionAim && precision[0])
+        {
+            aimPoint=precision[0]->getTransPos();
+            aimPoint.y+=0.8f;
+        }
+        auto locks=validAim && charge.frames>=KunaiPolicy::VolleyCharge ?
             AcquireTargets(cameraPosition,direction,0.94f) : precision;
+        if (lockInfo.hasLock && !precisionAim)
+        {
+            locks[0] = lockInfo.enemy;
+        }
         auto* item=NativeKnifeInventory::Item();
         const unsigned ammo=item ? unsigned((std::max)(0,item->m_nBasePossession)) : 0;
         aimVisible=throwDown && precisionAim && validAim && eligible;aimFrames=charge.frames;aimAmmo=ammo;
@@ -474,12 +600,22 @@ public:
                 for(unsigned i=0;i<plan.count;++i)
                 {
                     Entity* target=available ? targets[i%available] : nullptr;
+                    if (!target && lockInfo.hasLock) target = lockInfo.enemy;
                     const float spread=request.frames>=KunaiPolicy::VolleyCharge ?
                         KunaiPolicy::FanSpread(i,plan.count) : 0;
                     if(ThrowHeatblade(player,plan.variant,target,request.point,request.direction,plan.homing,request.precision,spread)) ++fired;
                 }
             if(fired)
             {
+                if (lockInfo.hasLock && !request.precision)
+                {
+                    const float fX = lockInfo.position.x - player->m_pEntity->getTransPos().x;
+                    const float fZ = lockInfo.position.z - player->m_pEntity->getTransPos().z;
+                    if (fX * fX + fZ * fZ > 0.001f)
+                    {
+                        player->m_Rot.y = std::atan2(fX, fZ);
+                    }
+                }
                 burst.Fired(fired,item->m_nBasePossession<=0);
                 AnimateThrow(player);
                 if(item->m_nBasePossession<=0) releases.clear();

@@ -10,14 +10,30 @@ namespace SamUltimatePolicy
     { return ((on|trig)&ControllerButton)!=0 && (previous&ControllerButton)==0; }
     // Unused/default case in both native Sam input and action dispatch tables.
     constexpr uint32_t Action = 0x10007Cu;
-    struct Move { std::string name; std::string windup; std::string release; bool raiden=false; };
+    struct Move {
+        std::string name; std::string windup; std::string release;
+        bool raiden=false;
+        bool playable=false;
+        std::vector<std::string> followups{};
+        const std::string& Stage(unsigned index) const {
+            if (!windup.empty()) { if (index == 0) return windup; --index; }
+            return index == 0 ? release : followups.at(index - 1);
+        }
+        std::vector<std::string> Stages() const {
+            std::vector<std::string> stages;
+            if (!windup.empty()) stages.push_back(windup);
+            stages.push_back(release);
+            stages.insert(stages.end(), followups.begin(), followups.end());
+            return stages;
+        }
+    };
     inline std::vector<Move> Moves = {
         {"Boss stone burst", "3020", "3024"},
         {"Boss charged slash", "3000", "3004"},
         {"Boss sonic slash", "3010", "3014"},
         {"Boss sweeping finisher", "", "2600"},
         {"Boss leaping slash", "3300", "3302"},
-        {"Sam rapid slashes", "9100", "9108"},
+        {"Sam rapid/spinning slashes", "9100", "9101", false, true, {"9102", "9108"}},
         {"Boss sweeping combo", "2600", "2610"},
         {"Boss Judgement Cut", "92e0", "3015"},
         {"Raiden thunder slice", "", "2400", true},
@@ -26,6 +42,11 @@ namespace SamUltimatePolicy
         {"Boss unarmed tackle & smash", "a646", "a648"},
         {"Boss Murasama round trip throw", "3200", "3210"},
         {"Raiden lightning draw slash", "2420", "2422", true},
+        {"Boss forward evade slash", "", "2510"},
+        {"Boss backward evade slash", "", "2520"},
+        {"Boss left evade slash", "", "2530"},
+        {"Boss right evade slash", "", "2540"},
+        {"Boss advancing flurry", "", "2220"},
     };
     inline unsigned Count() { return Moves.size(); }
     // Boss attacks belong to directional add-ons. Only Raiden specials use X.

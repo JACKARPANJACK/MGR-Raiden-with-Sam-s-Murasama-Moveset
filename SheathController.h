@@ -2,62 +2,48 @@
 
 #include <Pl0000.h>
 #include <EntitySystem.h>
+#include <cObjReadManager.h>
 #include <Hw.h>
 #include <windows.h>
 #include <cstring>
 #include "SamResourceManager.h"
 #include "SamSheathPolicy.h"
+#include "1-GameFileFlagCheck.h"
 
 class SheathController
 {
 private:
     bool m_bAttachedToHip = false;
     bool m_bAttachedToHand = false;
+    bool m_swapFaulted = false;
     Pl0000* m_pLastPlayer = nullptr;
-    char m_lastAnimCode[16]{};
-    int m_lastSwordHidden = -1;
-    Entity* m_boundSheath = nullptr;
     bool m_savedConstraint = false;
+    uint32_t m_originalSheathId = 0;
     unsigned m_savedBone = 0x711, m_savedRotationBone = 0;
     Hw::cVec4 m_savedOffset{}, m_savedRotation{};
     EntityHandle m_originalSheath{};
     EntityHandle m_samSheath{};
-    EntityHandle m_modelSwapSheath{};
-    eObjID m_modelSwapOriginalObject{};
-    eObjID m_modelSwapOriginal{};
-    bool m_modelSwapped = false;
-    bool m_samDetached = false;
-    unsigned m_sheathTracePlayer = 0;
-    bool m_sheathTraceDone = false;
 
-    static void Trace(const char* text)
+    static void Trace(const char* message)
     {
         char path[MAX_PATH]{};
         GetModuleFileNameA(nullptr, path, MAX_PATH);
         char* slash = std::strrchr(path, '\\');
-        if (slash) std::strcpy(slash + 1, "scripts\\RaidenMoveset-debug.log");
-        FILE* f = nullptr;
-        if (fopen_s(&f, path, "a") == 0 && f)
-        {
-            std::fprintf(f, "[SamMoveset] SHEATH %s\n", text ? text : "unknown");
-            std::fclose(f);
+        if (!slash) return;
+        std::strcpy(slash + 1, "scripts\\RaidenMoveset-debug.log");
+        FILE* file = nullptr;
+        if (fopen_s(&file, path, "a") == 0 && file) {
+            std::fprintf(file, "[SamMoveset] SHEATH %s\n", message);
+            std::fclose(file);
         }
     }
 
     static void PrepareNativeSheath(Entity* entity)
     {
         if (!entity || !entity->m_pBehavior) return;
-        // IDA: Pl0000's native sheath path calls sub_611C60(behavior, 0)
-        // immediately after attachObject(3,...). This builds the Pl0013
-        // scene/animation state; createEntity alone leaves a detached model.
+        // Native Pl0013 scene setup: calls sub_A11C60(behavior, 0)
         using Prepare = int(__thiscall*)(Behavior*, int);
-        reinterpret_cast<Prepare>(shared::base + 0x611C60)(entity->m_pBehavior, 0);
-        // IDA 0x7BD787-0x7BD792: the native path then invokes behavior
-        // vtable slot 25 (vtable byte offset 0x64) before setting m_pOwner.
-        using NativeFinalize = void(__thiscall*)(Behavior*);
-        NativeFinalize* vtable = *reinterpret_cast<NativeFinalize**>(entity->m_pBehavior);
-        if (vtable && vtable[0x64 / sizeof(void*)])
-            vtable[0x64 / sizeof(void*)](entity->m_pBehavior);
+        reinterpret_cast<Prepare>(shared::base + 0x611C60)(entity->m_pBehavior, 0); // 0x400000 + 0x611C60 = 0xA11C60
     }
 
     static unsigned NativeSamSheathBone(Pl0000* player)
@@ -68,7 +54,7 @@ private:
         if (player && player->getPartsPtr(0x7F0u))
             return 0x7F0u;
 
-        // Fallback for custom skins missing 0x7F0:
+        // Fallback for custom/standard Raiden skins missing 0x7F0:
         const auto mode = *reinterpret_cast<const unsigned*>(shared::base + 0x1BEA024);
         return 0x710u + (mode == 0xEu ? 1u : 0u);
     }
@@ -81,110 +67,93 @@ private:
         return 0x710u + (mode == 0xEu ? 1u : 0u);
     }
 
-    bool UseSamSheath(Pl0000* player)
+    void TrackPlayer(Pl0000* player)
     {
-        if (m_sheathTracePlayer != reinterpret_cast<unsigned>(player))
+        if (m_pLastPlayer == player) return;
+        m_pLastPlayer = player;
+        m_bAttachedToHip = false;
+        m_bAttachedToHand = false;
+        m_swapFaulted = false;
+        m_savedConstraint = false;
+        m_originalSheathId = 0;
+        m_originalSheath = nullptr;
+        m_samSheath = nullptr;
+    }
+
+    bool EnsureSamSheath(Pl0000* player)
+    {
+        if (!player) return false;
+        TrackPlayer(player);
+        if (m_swapFaulted) return false;
+
+        Entity* current = player->m_pSheathEntity;
+        if (!current || reinterpret_cast<uintptr_t>(current) < 0x10000)
+            return false;
+
+        const bool currentIsSam = current->m_ObjId == static_cast<eObjID>(0x11404);
+        if (currentIsSam) m_samSheath = current;
+        else if (m_originalSheath.getEntity() != current || !m_savedConstraint)
         {
-            m_sheathTracePlayer = reinterpret_cast<unsigned>(player);
-            m_sheathTraceDone = false;
-        }
-        Entity* sam = m_samSheath.getEntity();
-        if (sam && player->m_pSheathEntity == sam) return true;
-        if (sam && m_samDetached)
-        {
-            Entity* original = player->m_pSheathEntity;
-            if (!original || !original->m_pBehavior) return false;
-            Constraints* c = player->getConstraintById(3);
-            if (c && !m_savedConstraint)
+            // Capture the actual costume entity before replacing it. A native
+            // costume rebuild supplies a new original and attachment transform.
+            m_originalSheath = current;
+            m_originalSheathId = static_cast<uint32_t>(current->m_ObjId);
+            m_savedConstraint = false;
+            Constraints* original = player->getConstraintById(3);
+            if (original)
             {
                 m_savedConstraint = true;
-                m_savedBone = c->m_nBone;
-                m_savedRotationBone = c->m_nRotationBone;
-                m_savedOffset = c->m_vecOffset;
-                m_savedRotation = c->m_vecRotation;
+                m_savedBone = original->m_nBone;
+                m_savedRotationBone = original->m_nRotationBone;
+                m_savedOffset = original->m_vecOffset;
+                m_savedRotation = original->m_vecRotation;
             }
-            m_originalSheath = original;
-            original->m_pBehavior->removeConstraint(4);
-            original->m_pBehavior->offDisp();
-            player->removeConstraint(3);
-            const unsigned samBone = NativeSamSheathBone(player);
-            player->attachObject(3, player->m_pEntity, sam, samBone, 0);
-            c = player->getConstraintById(3);
-            if (c)
-            {
-                c->m_vecOffset = Hw::cVec4(0.0f, 0.0f, 0.0f, 0.0f);
-                c->m_vecRotation = Hw::cVec4(0.0f, 0.0f, 0.0f, 0.0f);
-            }
-            PrepareNativeSheath(sam);
-            sam->m_pBehavior->m_pOwner = player;
-            sam->m_pBehavior->onDisp();
-            player->m_SheathHandle = sam;
-            player->m_pSheathEntity = sam;
-            m_samDetached = false;
-            m_lastAnimCode[0] = 0;
-            m_lastSwordHidden = -1;
-            Trace("reused streamed Sam sheath carrier");
-            return true;
-        }
-        if (sam)
-        {
-            // Keep a carrier alive across the toggle. Releasing a cObj whose
-            // data file was rebound to the streamed DLC archive runs the
-            // engine's archive destructor while the archive manager still
-            // owns it and tears down the game process.
-            sam->m_pBehavior->offDisp();
-            m_samSheath = nullptr;
-            m_originalSheath = nullptr;
-            m_savedConstraint = false;
-            m_samDetached = false;
-        }
-        Entity* original = player->m_pSheathEntity;
-        if (!original || !original->m_pBehavior)
-        {
-            if (!m_sheathTraceDone) { Trace("original sheath unavailable"); m_sheathTraceDone = true; }
-            return false;
-        }
-        // The resource manager mounts data107.cpk and retains pl1404 until
-        // player shutdown. Never construct an entity from an unfinished stream.
-        if (!g_ObjReadManager.isObjectLoaded(static_cast<eObjID>(0x11404), 0))
-        {
-            if (!m_sheathTraceDone) { Trace("pl1404 not loaded yet"); m_sheathTraceDone = true; }
-            return false;
         }
 
-        // IDA 0x18a0b00: entity factory registers 0x11404 with class name "Pl0013",
-        // but in Raiden's campaign, Pl0013 is hardcoded to the Prologue Sheath.
-        sam = g_EntitySystem.createEntity("Pl0013", static_cast<eObjID>(0x11404), nullptr);
-        if (!sam)
+        Constraints* mount = player->getConstraintById(3);
+        const unsigned desiredBone = NativeSamSheathBone(player);
+        if (currentIsSam && current->m_pBehavior && mount &&
+            mount->m_MainEntity.getEntity() == player->m_pEntity &&
+            mount->m_ObjectEntityHandle.getEntity() == current &&
+            mount->m_nBone == desiredBone && mount->m_nRotationBone == 0)
         {
-            if (!m_sheathTraceDone)
-            {
-                Trace("createEntity failed for Sam pl1404 sheath (0x11404)");
-                m_sheathTraceDone = true;
-            }
-            return false;
+            player->m_SheathHandle = current;
+            current->m_pBehavior->onDisp();
+            return true;
         }
-        if (!sam->m_pBehavior) { Trace("created entity has no behavior"); sam->release(); return false; }
-        Constraints* c = player->getConstraintById(3);
-        if (c && !m_savedConstraint)
+
+        // Check if we already have an instantiated Sam sheath entity
+        bool newlyCreated = false;
+        Entity* sam = m_samSheath.getEntity();
+        if (!sam || !sam->m_pBehavior)
         {
-            m_savedConstraint = true;
-            m_savedBone = c->m_nBone;
-            m_savedRotationBone = c->m_nRotationBone;
-            m_savedOffset = c->m_vecOffset;
-            m_savedRotation = c->m_vecRotation;
+            // Verify pl1404 is loaded in memory
+            if (!g_ObjReadManager.isObjectLoaded(static_cast<eObjID>(0x11404), 0))
+                return false;
+
+            // Native Sam creation at RVA 0x46EC82 uses this entity name.
+            sam = g_EntitySystem.createEntity("Sam_Sheath", static_cast<eObjID>(0x11404), nullptr);
+            if (!sam || !sam->m_pBehavior)
+                return false;
+
+            m_samSheath = sam;
+            newlyCreated = true;
         }
-        m_originalSheath = original;
-        m_samSheath = sam;
-        m_samDetached = false;
-        // Match the native order from IDA: attach, initialize scene state,
-        // then assign the player owner used by bone-space updates.
-        original->m_pBehavior->removeConstraint(4);
-        original->m_pBehavior->offDisp();
+
+        // Hide original sheath (do not destroy it!)
+        Entity* orig = m_originalSheath.getEntity();
+        if (orig && orig != sam && orig->m_pBehavior)
+        {
+            orig->m_pBehavior->removeConstraint(4);
+            orig->m_pBehavior->offDisp();
+        }
+
+        // Attach Sam's sheath to constraint 3
         player->removeConstraint(3);
         const unsigned samBone = NativeSamSheathBone(player);
         player->attachObject(3, player->m_pEntity, sam, samBone, 0);
-        c = player->getConstraintById(3);
+        player->setConstraintsBone(3, samBone, 0);
+        Constraints* c = player->getConstraintById(3);
         if (c)
         {
             c->m_nBone = samBone;
@@ -200,46 +169,28 @@ private:
                 c->m_vecRotation = Hw::cVec4(-0.15f, 0.0f, 0.10f, 0.0f);
             }
         }
-        PrepareNativeSheath(sam);
+
+        if (newlyCreated)
+        {
+            PrepareNativeSheath(sam);
+        }
         sam->m_pBehavior->m_pOwner = player;
         sam->m_pBehavior->onDisp();
-        player->m_SheathHandle = sam;
+
         player->m_pSheathEntity = sam;
-        Trace("Sam pl1404 sheath attached");
-        m_sheathTraceDone = false;
-        m_lastAnimCode[0] = 0;
-        m_lastSwordHidden = -1;
+        player->m_SheathHandle = sam;
+
+        // Sync native engine constraint tracking fields so the engine's own behavior tick
+        // (at 0x478E30) doesn't overwrite our constraint 17 to a stale bone.
+        // [behavior+0x5444] = current desired bone, [behavior+0x5448] = last applied bone.
+        *reinterpret_cast<unsigned*>(reinterpret_cast<char*>(player) + 0x5444) = samBone;
+        *reinterpret_cast<unsigned*>(reinterpret_cast<char*>(player) + 0x5448) = samBone;
+
+        g_GameFunctionManager.UpdateSwordConstraints(player);
+
+        Trace("Sam_Sheath pl1404 attached; original retained for toggle-off");
+
         return true;
-    }
-
-    void UseOriginalSheath(Pl0000* player)
-    {
-        Entity* sam = m_samSheath.getEntity();
-        Entity* original = m_originalSheath.getEntity();
-        if (m_bAttachedToHand)
-        {
-            player->removeConstraint(17);
-            m_bAttachedToHand = false;
-        }
-        if (sam && player->m_pSheathEntity == sam)
-        {
-            sam->m_pBehavior->removeConstraint(4);
-            sam->m_pBehavior->offDisp();
-            player->removeConstraint(3);
-            player->m_SheathHandle = original;
-            player->m_pSheathEntity = original;
-            if (original && original->m_pBehavior) original->m_pBehavior->onDisp();
-            m_samDetached = true;
-        }
-    }
-
-    static void SanitizeCode(char* dst, size_t cap, const char* src)
-    {
-        if (!dst || cap == 0) return;
-        dst[0] = '\0';
-        if (!src || !*src) return;
-
-        if (cap >= 5) SamSheathPolicy::Code(dst, src);
     }
 
     void RepositionSheathToHip(Pl0000* player)
@@ -247,60 +198,16 @@ private:
         if (!player) return;
         __try
         {
-            if (!UseSamSheath(player)) return;
-            Entity* pSheath = player->m_pSheathEntity;
-            if (!pSheath || reinterpret_cast<uintptr_t>(pSheath) < 0x10000)
-                return;
+            TrackPlayer(player);
 
-            // Make sure sheath is visible
-            if (pSheath->m_pBehavior)
-                pSheath->m_pBehavior->onDisp();
-
-            // Re-bind Constraint 3 (sheath) to left hip bone (0x710) using Sam's native logic
-            Constraints* c = player->getConstraintById(3);
-            if (m_boundSheath != pSheath)
-            {
-                m_boundSheath = pSheath;
-                m_lastAnimCode[0] = 0;
-                m_lastSwordHidden = -1;
-            }
-            if (!m_savedConstraint && c)
-            {
-                m_savedConstraint = true;
-                m_savedBone = c->m_nBone;
-                m_savedRotationBone = c->m_nRotationBone;
-                m_savedOffset = c->m_vecOffset;
-                m_savedRotation = c->m_vecRotation;
-            }
-            const unsigned sheathBone = NativeSamSheathBone(player);
-            const bool rebind = !c || c->m_nBone != sheathBone;
-            if (rebind)
-            {
-                player->removeConstraint(3);
-                player->attachObject(3, player->m_pEntity, pSheath, sheathBone, 0);
-                player->setConstraintsBone(3, sheathBone, 0);
-                c = player->getConstraintById(3);
-            }
-
-            if (c && rebind)
-            {
-                c->m_nBone = sheathBone;
-                c->m_nRotationBone = 0;
-                if (sheathBone == 0x7F0u)
-                {
-                    // Zero offsets: Sam's Murasama sheath (pl1404) origin is calibrated
-                    // to sit naturally on hip bone 0x7F0 without intersecting the body
-                    c->m_vecOffset = Hw::cVec4(0.0f, 0.0f, 0.0f, 0.0f);
-                    c->m_vecRotation = Hw::cVec4(0.0f, 0.0f, 0.0f, 0.0f);
-                }
-                else
-                {
-                    c->m_vecOffset = Hw::cVec4(-0.10f, 0.02f, -0.04f, 0.0f);
-                    c->m_vecRotation = Hw::cVec4(-0.15f, 0.0f, 0.10f, 0.0f);
-                }
-            }
+            // Keep the original sheath and transform untouched until the Sam
+            // archive and entity are ready. Update retries streaming failures.
+            EnsureSamSheath(player);
         }
-        __except (EXCEPTION_EXECUTE_HANDLER) {}
+        __except (EXCEPTION_EXECUTE_HANDLER) {
+            m_swapFaulted = true;
+            Trace("swap fault: stopped retries for this activation; check installed pl1404 DAT/DTT texture pair");
+        }
     }
 
     void RestoreSheathToBack(Pl0000* player)
@@ -308,78 +215,82 @@ private:
         if (!player) return;
         __try
         {
-            if (m_bAttachedToHand)
+            TrackPlayer(player);
+
+            if (m_bAttachedToHand || player->getConstraintById(17))
             {
                 player->removeConstraint(17);
                 m_bAttachedToHand = false;
             }
-            UseOriginalSheath(player);
-            Entity* pSheath = player->m_pSheathEntity;
-            if (!pSheath || reinterpret_cast<uintptr_t>(pSheath) < 0x10000)
-                return;
 
-            const unsigned raidenBone = m_savedConstraint ? m_savedBone : NativeRaidenSheathBone();
-            const unsigned raidenRotBone = m_savedConstraint ? m_savedRotationBone : 0;
+            // Hide Sam's sheath if present
+            Entity* sam = m_samSheath.getEntity();
+            if (sam && sam->m_pBehavior)
+            {
+                sam->m_pBehavior->removeConstraint(4);
+                sam->m_pBehavior->offDisp();
+            }
 
-            // Restore the original attachment, including costume-specific transforms.
-            Constraints* c = player->getConstraintById(3);
-            if (!c || c->m_nBone != raidenBone)
+            // Obtain Raiden's original sheath
+            bool origNewlyCreated = false;
+            Entity* orig = m_originalSheath.getEntity();
+            if (!orig || !orig->m_pBehavior)
+            {
+                // In case player was spawned directly while Sam was active
+                uint32_t origId = m_originalSheathId;
+                if (origId && g_ObjReadManager.isObjectLoaded(static_cast<eObjID>(origId), 0))
+                {
+                    orig = g_EntitySystem.createEntity("Pl0010_Sheath", static_cast<eObjID>(origId), nullptr);
+                    if (orig && orig->m_pBehavior)
+                    {
+                        m_originalSheath = orig;
+                        origNewlyCreated = true;
+                    }
+                }
+            }
+
+            if (orig && orig->m_pBehavior)
             {
                 player->removeConstraint(3);
-                player->attachObject(3, player->m_pEntity, pSheath, raidenBone, raidenRotBone);
+                const unsigned raidenBone = m_savedConstraint ? m_savedBone : NativeRaidenSheathBone();
+                const unsigned raidenRotBone = m_savedConstraint ? m_savedRotationBone : 0;
+
+                player->attachObject(3, player->m_pEntity, orig, raidenBone, raidenRotBone);
                 player->setConstraintsBone(3, raidenBone, raidenRotBone);
-                c = player->getConstraintById(3);
+                Constraints* c = player->getConstraintById(3);
+                if (c)
+                {
+                    c->m_nBone = raidenBone;
+                    c->m_nRotationBone = raidenRotBone;
+                    c->m_vecOffset = m_savedConstraint ? m_savedOffset : Hw::cVec4(0, 0, 0, 0);
+                    c->m_vecRotation = m_savedConstraint ? m_savedRotation : Hw::cVec4(0, 0, 0, 0);
+                }
+
+                if (origNewlyCreated)
+                {
+                    PrepareNativeSheath(orig);
+                }
+                orig->m_pBehavior->m_pOwner = player;
+                orig->m_pBehavior->onDisp();
+
+                player->m_pSheathEntity = orig;
+                player->m_SheathHandle = orig;
+
+                g_GameFunctionManager.UpdateSwordConstraints(player);
             }
 
-            if (c)
-            {
-                c->m_nBone = raidenBone;
-                c->m_nRotationBone = raidenRotBone;
-                c->m_vecOffset = m_savedConstraint ? m_savedOffset : Hw::cVec4(0, 0, 0, 0);
-                c->m_vecRotation = m_savedConstraint ? m_savedRotation : Hw::cVec4(0, 0, 0, 0);
-            }
+            g_BxmFlagHandle.Reset_BxmFlagHandle_StaticVariable();
+            m_bAttachedToHip = false;
+            m_savedConstraint = false;
         }
         __except (EXCEPTION_EXECUTE_HANDLER) {}
     }
 
     void SyncSheathAnimation(Pl0000* player)
     {
-        if (!player) return;
-        Entity* pSheath = player->m_pSheathEntity;
-        if (!pSheath || reinterpret_cast<uintptr_t>(pSheath) < 0x10000 || !pSheath->m_pBehavior)
-            return;
-        if (!m_modelSwapped && pSheath != m_samSheath.getEntity()) return;
-
-        const char* animName = nullptr;
-        if (player->m_pAnimationSlot && player->m_pAnimationSlot->m_pArray)
-            animName = player->m_pAnimationSlot->m_pArray[0].m_pAnimName;
-
-        char cleanCode[16]{};
-        if (animName && animName[0] != '\0')
-            SanitizeCode(cleanCode, sizeof(cleanCode), animName);
-        else
-            std::strcpy(cleanCode, "0000");
-
-        const bool animChanged = (std::strcmp(cleanCode, m_lastAnimCode) != 0);
-        const bool swordChanged = (player->m_bSwordHidden != m_lastSwordHidden);
-
-        if (animChanged || swordChanged)
-        {
-            std::strncpy(m_lastAnimCode, cleanCode, sizeof(m_lastAnimCode) - 1);
-            m_lastSwordHidden = player->m_bSwordHidden;
-
-            void* sheathMot = SamResourceManager::Instance().GetSheathMotion(cleanCode);
-            if (sheathMot)
-            {
-                pSheath->m_pBehavior->setDirectAnimation(
-                    sheathMot, nullptr, 0, 0.05f, 1.0f, 0x8000000, 0.0f, 1.0f);
-            }
-            else
-            {
-                // Fallback to sheath map state if no specific motion matched
-                pSheath->m_pBehavior->requestAnimationByMap(player->m_bSwordHidden ? 4 : 5);
-            }
-        }
+        if (!player || !m_bAttachedToHip || player->m_pSheathEntity != m_samSheath.getEntity()) return;
+        __try { g_BxmFlagHandle.UpdateSheathAnimation(player); }
+        __except (EXCEPTION_EXECUTE_HANDLER) {}
     }
 
 public:
@@ -395,22 +306,8 @@ public:
     {
         if (!player) return;
 
-        if (m_pLastPlayer != player)
-        {
-            m_pLastPlayer = player;
-            m_bAttachedToHip = false;
-            m_bAttachedToHand = false;
-            m_lastAnimCode[0] = '\0';
-            m_lastSwordHidden = -1;
-            m_boundSheath = nullptr;
-            m_savedConstraint = false;
-            m_originalSheath = nullptr;
-            m_samSheath = nullptr;
-            m_modelSwapSheath = nullptr;
-            m_modelSwapped = false;
-            m_samDetached = false;
-        }
-
+        TrackPlayer(player);
+        if (toHip && !m_bAttachedToHip) m_swapFaulted = false;
         m_bAttachedToHip = toHip;
 
         if (toHip)
@@ -421,82 +318,48 @@ public:
         else
         {
             RestoreSheathToBack(player);
-            m_bAttachedToHand = false;
-            m_lastAnimCode[0] = '\0';
-            m_lastSwordHidden = -1;
-            m_boundSheath = nullptr;
-            m_savedConstraint = false;
         }
     }
 
     void Update(Pl0000* player)
     {
         if (!player) return;
-
-        if (m_pLastPlayer != player)
+        __try
         {
-            m_pLastPlayer = player;
-            m_bAttachedToHip = false;
-            m_bAttachedToHand = false;
-            m_lastAnimCode[0] = '\0';
-            m_lastSwordHidden = -1;
-            m_boundSheath = nullptr;
-            m_savedConstraint = false;
-            m_originalSheath = nullptr;
-            m_samSheath = nullptr;
-            m_modelSwapSheath = nullptr;
-            m_modelSwapped = false;
-            m_samDetached = false;
-        }
+            TrackPlayer(player);
 
-        if (!m_bAttachedToHip)
-            return;
+            if (!m_bAttachedToHip || m_swapFaulted)
+                return;
 
-        RepositionSheathToHip(player);
+            // Check entity identity as well as the mount. A correct bone can
+            // still belong to Raiden's sheath while pl1404 is streaming.
+            if (!EnsureSamSheath(player)) return;
 
-        // Native Sam dynamic hand constraint logic (IDA RVA 0x478E30 - 0x478EBE):
-        // Sequence event flag 21 (0x15) signals Sam grasping the sheath with left hand.
-        // When active: attach constraint 17 to left hand bone 0x701 with rotation bone 10 (0xA).
-        // When inactive: remove constraint 17; sheath rests on hip via constraint 3 (bone 0x7F0).
-        Entity* sam = m_samSheath.getEntity();
-        if (sam && player->m_pSheathEntity == sam)
-        {
-            const bool holdInHand = player->ckSeqFlag(21) != 0;
-            if (holdInHand && !m_bAttachedToHand)
+            Entity* sam = m_samSheath.getEntity();
+            if (sam && player->m_pSheathEntity == sam)
             {
-                player->removeConstraint(17);
-                player->attachObject(17, player->m_pEntity, sam, 0x701, 10);
-                m_bAttachedToHand = true;
+                g_BxmFlagHandle.CheckSheath_2097152Flag0(player);
+                g_BxmFlagHandle.CheckSheath_2097152Flag1(player);
+                m_bAttachedToHand = player->getConstraintById(17) != nullptr;
+                // Native visibility updates can re-enable the retained original.
+                Entity* original = m_originalSheath.getEntity();
+                if (original && original != sam && original->m_pBehavior)
+                    original->m_pBehavior->offDisp();
             }
-            else if (!holdInHand && m_bAttachedToHand)
-            {
-                player->removeConstraint(17);
-                m_bAttachedToHand = false;
-            }
-        }
 
-        SyncSheathAnimation(player);
+            SyncSheathAnimation(player);
+        }
+        __except (EXCEPTION_EXECUTE_HANDLER) {
+            m_swapFaulted = true;
+            Trace("update fault: stopped sheath retries until next activation");
+        }
     }
 
     void AnimateSheathDirect(Pl0000* player, const char* code)
     {
-        if (!player || !code) return;
-        Entity* pSheath = player->m_pSheathEntity;
-        if (!pSheath || reinterpret_cast<uintptr_t>(pSheath) < 0x10000 || !pSheath->m_pBehavior)
-            return;
-        if (pSheath != m_samSheath.getEntity()) return;
-
-        m_boundSheath = pSheath;
-        char cleanCode[16]{};
-        SanitizeCode(cleanCode, sizeof(cleanCode), code);
-        void* sheathMot = SamResourceManager::Instance().GetSheathMotion(cleanCode);
-        if (sheathMot)
-        {
-            std::strncpy(m_lastAnimCode, cleanCode, sizeof(m_lastAnimCode) - 1);
-            m_lastSwordHidden = player->m_bSwordHidden;
-            pSheath->m_pBehavior->setDirectAnimation(
-                sheathMot, nullptr, 0, 0.05f, 1.0f, 0x8000000, 0.0f, 1.0f);
-        }
+        if (!player || !code || !m_bAttachedToHip || player->m_pSheathEntity != m_samSheath.getEntity()) return;
+        __try { g_BxmFlagHandle.UpdateSheathAnimation(player, code); }
+        __except (EXCEPTION_EXECUTE_HANDLER) {}
     }
 
     bool IsAttachedToHip() const { return m_bAttachedToHip; }

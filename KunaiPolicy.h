@@ -135,6 +135,30 @@ namespace KunaiPolicy
             current.z*cosine+perpendicular.z*sine+axis.z*parallel});
         return {turn.x*speed,turn.y*speed,turn.z*speed};
     }
+    inline Vector SteerPrecision(Vector velocity, Vector offset, float maxTurn = 0.50f)
+    {
+        const float speed = Length(velocity);
+        const float distance = Length(offset);
+        if (!std::isfinite(speed) || !std::isfinite(distance) || speed < 0.0001f || distance < 0.05f) return velocity;
+        const auto current = Unit(velocity), desired = Unit(offset);
+        auto cross = [](Vector a, Vector b) { return Vector{a.y*b.z - a.z*b.y, a.z*b.x - a.x*b.z, a.x*b.y - a.y*b.x}; };
+        const float angle = std::acos(std::clamp(Dot(current, desired), -1.0f, 1.0f));
+        if (angle < 0.0001f) return velocity;
+        auto axis = cross(current, desired);
+        if (Length(axis) < 0.0001f)
+        {
+            axis = cross(current, {0, 1, 0});
+            if (Length(axis) < 0.0001f) axis = cross(current, {1, 0, 0});
+        }
+        axis = Unit(axis);
+        const float step = (std::min)(angle, maxTurn), cosine = std::cos(step), sine = std::sin(step);
+        const auto perpendicular = cross(axis, current);
+        const float parallel = Dot(axis, current) * (1 - cosine);
+        const auto turn = Unit({current.x*cosine + perpendicular.x*sine + axis.x*parallel,
+            current.y*cosine + perpendicular.y*sine + axis.y*parallel,
+            current.z*cosine + perpendicular.z*sine + axis.z*parallel});
+        return {turn.x * speed, turn.y * speed, turn.z * speed};
+    }
     inline void Configure(unsigned char* data,int variant)
     {
         auto word=[data](unsigned offset,unsigned value){std::memcpy(data+offset,&value,4);};

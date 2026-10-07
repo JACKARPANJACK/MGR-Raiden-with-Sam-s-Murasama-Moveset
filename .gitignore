@@ -28,3 +28,6 @@ imgui.ini
 !/tests/smg_tests.cpp
 !/tests/kunai_tests.cpp
 *.py
+*.cmd
+/tools
+/tools

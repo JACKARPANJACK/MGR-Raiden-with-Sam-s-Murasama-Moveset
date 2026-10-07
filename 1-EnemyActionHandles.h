@@ -2,6 +2,7 @@
 #include "1-GameFunctionManager.h"
 #include "1-EffectManager.h"
 #include "1-GlobleVarious.h"
+#include "SamTargets.h"
 
 class BossEnemyManager
 {
@@ -79,12 +80,30 @@ public:
 
 	void CheckRage(Pl0000* player) {}
 
+	void UpdateEnemies()
+	{
+		Pl0000* player = g_GameUIManager.m_pPlayer ? g_GameUIManager.m_pPlayer : g_Scene.m_pPlayer;
+		if (!player) return;
+
+		auto& list = g_EntitySystem.getEntityList();
+		auto it = list.begin();
+		const unsigned count = unsigned((std::max)(0, (std::min)(8192, list.getSize())));
+		for (unsigned visited = 0; visited < count && it != Hw::cFixedList<Entity*>::iterator{}; ++visited, ++it)
+		{
+			Entity* ent = *it;
+			if (!ent || !ent->m_pBehavior || !ent->isAlive()) continue;
+			if (!SamTargets::Enemy(ent)) continue;
+			auto* enemy = reinterpret_cast<BehaviorEmBase*>(ent->m_pBehavior);
+			EnemyQTEActionHandles(enemy);
+		}
+	}
+
 private:
 	void EnemyQTEActionHandles(BehaviorEmBase* enemy)
 	{
 		if (!enemy) return;
 
-		Pl0000* player = g_GameUIManager.m_pPlayer;
+		Pl0000* player = g_GameUIManager.m_pPlayer ? g_GameUIManager.m_pPlayer : g_Scene.m_pPlayer;
 		if (!player) return;
 
 		static const std::unordered_map<unsigned int, std::vector<std::pair<int, int>>> QTE_ANIM_MAP = {

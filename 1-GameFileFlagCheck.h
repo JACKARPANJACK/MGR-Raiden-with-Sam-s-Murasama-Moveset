@@ -1,11 +1,22 @@
 #pragma once
 #include "1-GameFunctionManager.h"
+#include "SamResourceManager.h"
+#include "SamSheathPolicy.h"
 
 class BxmFlagHandle
 {
 private:
 	inline static bool Flag53;
 	inline static bool Flag53_;
+	Pl0000* m_player = nullptr;
+	Entity* m_sheath = nullptr;
+	char m_animation[5]{};
+	int m_swordHidden = -1;
+	void Track(Pl0000* player) {
+		if (m_player == player && m_sheath == player->m_pSheathEntity) return;
+		Reset_BxmFlagHandle_StaticVariable();
+		m_player = player; m_sheath = player->m_pSheathEntity;
+	}
 
 	enum FieldOffsets
 	{
@@ -40,29 +51,33 @@ public:
 	{
 		Flag53 = 0;
 		Flag53_ = 0;
+		m_player = nullptr; m_sheath = nullptr;
+		m_animation[0] = 0; m_swordHidden = -1;
 	}
 
 	int CheckSheath_2097152Flag0(Pl0000* player)
 	{
+		if (!player) return 0;
+		Track(player);
 		if (player->isUnarmed())
 			return 0;
 
-		((void(__thiscall*)(Pl0000*))(shared::base + 0x7E9130))(player);
-
 		bool hasFlag53 = player->ckSeqFlag(53);
 
-		if (hasFlag53 && !Flag53)
+		if (hasFlag53 && (!Flag53 || !player->getConstraintById(CONSTRAINT_4)))
 		{
-			player->m_bSwordHidden = 1;
-			player->removeConstraint(CONSTRAINT_4);
-
 			Entity* sheathEntity = player->m_pSheathEntity;
-			Entity* swordEntity = player->m_SwordHandle.getEntity();
+			Entity* swordEntity = player->m_pBladeEntity ? player->m_pBladeEntity : player->m_SwordHandle.getEntity();
 
-			if (sheathEntity && swordEntity)
-				player->attachObject(CONSTRAINT_4, sheathEntity, swordEntity, ATTACH_POINT_710, 0);
-
-			Flag53 = true;
+			if (sheathEntity && reinterpret_cast<uintptr_t>(sheathEntity) >= 0x10000 &&
+				swordEntity && reinterpret_cast<uintptr_t>(swordEntity) >= 0x10000)
+			{
+				player->m_bSwordHidden = 1;
+				player->removeConstraint(CONSTRAINT_4);
+				const int bone = (sheathEntity->m_ObjId == static_cast<eObjID>(0x11404)) ? 1808 : ATTACH_POINT_710;
+				player->attachObject(CONSTRAINT_4, sheathEntity, swordEntity, bone, 0);
+				Flag53 = true;
+			}
 		}
 		else if ((!hasFlag53 && Flag53) || player->m_OldRno0 == 0x100101)
 		{
@@ -71,13 +86,14 @@ public:
 			Flag53 = false;
 		}
 
-		((void(__thiscall*)(Behavior*))(shared::base + 0x45D250))(player);
 		return *(char*)((char*)player + FIELD_544C);
 	}
 
 	void CheckSheath_2097152Flag1(Behavior* behavior)
 	{
+		if (!behavior) return;
 		Pl0000* player = static_cast<Pl0000*>(behavior);
+		Track(player);
 
 		if (Trigger::StaFlags.STA_QTE && !Flag53_ && g_GameStateManager.IsMainSamPlayer)
 		{
@@ -87,31 +103,42 @@ public:
 			Flag53_ = true;
 		}
 
-		if (!Trigger::StaFlags.STA_QTE)
+		if (!Trigger::StaFlags.STA_QTE || !g_GameStateManager.IsMainSamPlayer)
 			Flag53_ = false;
 
-		if (player->isUnarmed())
-			return;
-
-		const int newField854 = player->ckSeqFlag(21) ? ATTACH_POINT_710 : ATTACH_POINT_710;
+		const bool holding = !player->isUnarmed() && player->ckSeqFlag(21);
+		Constraints* hip = player->getConstraintById(3);
+		const int newField854 = holding ? ATTACH_POINT_1793 : hip ? hip->m_nBone : ATTACH_POINT_2032;
 		*(int*)((char*)behavior + FIELD_5444) = newField854;
 
-		if (newField854 != *(int*)((char*)behavior + FIELD_5448))
-		{
-			EntityHandle* entityHandle = (EntityHandle*)((char*)behavior + FIELD_FF4);
-			Entity* attachedEntity = entityHandle->getEntity();
+		Constraints* grip = player->getConstraintById(CONSTRAINT_17);
+		const bool matches = grip && grip->m_MainEntity.getEntity() == player->m_pEntity &&
+			grip->m_ObjectEntityHandle.getEntity() == m_sheath &&
+			grip->m_nBone == 0x701u && grip->m_nRotationBone == 10u;
+		if (holding && m_sheath && reinterpret_cast<uintptr_t>(m_sheath) >= 0x10000 && !matches)
+			SamSheathPolicy::BindGrip(player, m_sheath);
+		else if (!holding && grip)
+			player->removeConstraint(CONSTRAINT_17);
+		*(int*)((char*)behavior + FIELD_5448) = newField854;
+	}
 
-			if (attachedEntity)
-			{
-				*(int*)((char*)behavior + FIELD_5448) = newField854;
-				behavior->removeConstraint(CONSTRAINT_17);
-
-				if (newField854 == ATTACH_POINT_710)
-					behavior->attachObject(CONSTRAINT_17, behavior->m_pEntity, attachedEntity, ATTACH_POINT_710, 10);
-			}
-		}
-
-		((void(__thiscall*)(Behavior*))(shared::base + 0x45D250))(behavior);
+	void UpdateSheathAnimation(Pl0000* player, const char* requested = nullptr)
+	{
+		if (!player) return;
+		Track(player);
+		if (!m_sheath || !m_sheath->m_pBehavior || Flag53_) return;
+		const char* name = requested;
+		if (!name && player->m_pAnimationSlot && player->m_pAnimationSlot->m_pArray)
+			name = player->m_pAnimationSlot->m_pArray[0].m_pAnimName;
+		char code[5]{};
+		if (!SamSheathPolicy::Code(code, name)) std::strcpy(code, "0000");
+		if (!std::strcmp(code, m_animation) && m_swordHidden == player->m_bSwordHidden) return;
+		std::strcpy(m_animation, code);
+		m_swordHidden = player->m_bSwordHidden;
+		void* motion = SamResourceManager::Instance().GetSheathMotion(code);
+		if (motion) m_sheath->m_pBehavior->setDirectAnimation(
+			motion, nullptr, 0, 0.05f, 1.0f, 0x8000000, 0.0f, 1.0f);
+		else m_sheath->m_pBehavior->requestAnimationByMap(player->m_bSwordHidden ? 4 : 5);
 	}
 
 private:

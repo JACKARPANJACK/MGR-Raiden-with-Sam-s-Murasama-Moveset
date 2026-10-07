@@ -1,6 +1,8 @@
 #pragma once
 #include <windows.h>
 #include <string>
+#include <algorithm>
+#include "SamArchiveLookup.h"
 
 namespace SamConfig
 {
@@ -56,9 +58,20 @@ namespace SamConfig
                 std::string windup = GetString("Moves", (prefix + "Windup").c_str(), "");
                 std::string release = GetString("Moves", (prefix + "Release").c_str(), "");
                 bool raiden = GetInt("Moves", (prefix + "Raiden").c_str(), 0) != 0;
-                SamUltimatePolicy::Moves.push_back({name, windup, release, raiden});
+                bool playable = GetInt("Moves", (prefix + "Playable").c_str(), 0) != 0;
+                SamUltimatePolicy::Move move{name, windup, release, raiden, playable};
+                std::stringstream followups(GetString("Moves", (prefix + "Followups").c_str(), ""));
+                std::string stage;
+                while (std::getline(followups, stage, ','))
+                    if (SamArchiveLookup::ValidCode(stage.c_str())) move.followups.push_back(stage);
+                SamUltimatePolicy::Moves.push_back(std::move(move));
             }
         }
+        for (int direction = 1; direction <= 4; ++direction)
+            for (int* table : {SamDirectionalPolicy::heldLight, SamDirectionalPolicy::heldHeavy,
+                SamDirectionalPolicy::flickLight, SamDirectionalPolicy::flickHeavy})
+                if (table[direction] < -1 || table[direction] >= static_cast<int>(SamUltimatePolicy::Count()))
+                    table[direction] = -1;
 
         // Ultimates
         std::string ultStr = GetString("Moves", "UltimateIndices", "");
@@ -70,7 +83,9 @@ namespace SamConfig
             while (std::getline(ss, token, ','))
             {
                 try {
-                    SamUltimatePolicy::UltimateIndices.push_back(std::stoi(token));
+                    const int index = std::stoi(token);
+                    if (index >= 0 && static_cast<unsigned>(index) < SamUltimatePolicy::Count())
+                        SamUltimatePolicy::UltimateIndices.push_back(static_cast<unsigned>(index));
                 } catch (...) {}
             }
         }

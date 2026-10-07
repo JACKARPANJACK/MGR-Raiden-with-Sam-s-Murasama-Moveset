@@ -35,6 +35,9 @@ private:
     bool m_effectsRegistered = false;
     bool m_requestIssued = false;
     bool m_dlcMounted = false;
+    unsigned m_savedSelectors[7]{};
+    unsigned m_samSelectors[7]{};
+    bool m_hasSavedSelectors = false;
     std::vector<uint8_t> m_chargeRecoverySequence;
 
     SamResourceManager() = default;
@@ -170,26 +173,26 @@ public:
             if (pDlcMode)
             {
                 const int originalMode = *pDlcMode;
-                // Native DLC initialization also selects DLC sound, collision-
-                // effect and effect-bullet tables globally. Restoring only DLC
-                // mode left bosses, enemies and cutscenes using Sam's tables.
-                // Register the DLC layer, then restore the scene's selectors.
                 constexpr unsigned selectors[]={0x1778858,0x17781B8,0x19BD180,0x19BD184,
                     0x148F5DC,0x148F5E0,0x148F5E4};
-                unsigned saved[7]{};
-                for (unsigned i=0;i<7;++i) saved[i]=*reinterpret_cast<unsigned*>(shared::base+selectors[i]);
+                for (unsigned i=0;i<7;++i)
+                    m_savedSelectors[i]=*reinterpret_cast<unsigned*>(shared::base+selectors[i]);
+                m_hasSavedSelectors = true;
                 __try
                 {
                     *pDlcMode = 8;
                     using DlcInitFn = void(__cdecl*)();
                     reinterpret_cast<DlcInitFn>(shared::base + 0x6538D0)();
                     m_effectsRegistered = true;
+                    for (unsigned i=0;i<7;++i)
+                        m_samSelectors[i]=*reinterpret_cast<unsigned*>(shared::base+selectors[i]);
                 }
                 __finally
                 {
                     *pDlcMode = originalMode;
+                    // Default back to scene selectors when not in active Sam mode
                     for (unsigned i=0;i<7;++i)
-                        *reinterpret_cast<unsigned*>(shared::base+selectors[i])=saved[i];
+                        *reinterpret_cast<unsigned*>(shared::base+selectors[i])=m_savedSelectors[i];
                 }
                 return true;
             }
@@ -197,6 +200,20 @@ public:
         __except (EXCEPTION_EXECUTE_HANDLER) {}
 
         return false;
+    }
+
+    void SetSamEffectsActive(bool active)
+    {
+        if (!m_effectsRegistered || !m_hasSavedSelectors) return;
+        constexpr unsigned selectors[] = {
+            0x1778858, 0x17781B8, 0x19BD180, 0x19BD184,
+            0x148F5DC, 0x148F5E0, 0x148F5E4
+        };
+        const unsigned* source = active ? m_samSelectors : m_savedSelectors;
+        for (unsigned i = 0; i < 7; ++i)
+        {
+            *reinterpret_cast<unsigned*>(shared::base + selectors[i]) = source[i];
+        }
     }
 
     SamArchiveLookup::Clip GetClip(const char* code,
@@ -349,7 +366,9 @@ public:
     }
     bool IsRuntimeReady()
     {
-        if (!m_isLoaded) return false;
+        // Boss and playable effects are both required by the moveset. Do not
+        // start attacks while the boss archive is still streaming/registering.
+        if (!m_isLoaded || !m_samBank || !m_bossBank) return false;
         return RegisterEffectsAndSound();
     }
     Hw::cFmerge* GetFmerge() { return m_isLoaded ? &m_pl1400Fmerge : nullptr; }

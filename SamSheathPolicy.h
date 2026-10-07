@@ -3,6 +3,20 @@
 #include "SamArchiveLookup.h"
 namespace SamSheathPolicy
 {
+    // Native RVA 0x478EA0-0x478EBE pushes arguments right-to-left:
+    // rotation 10, bone 0x701, sheath, player entity, constraint 17.
+    // Attach the sheath to the player's hand; never constrain the body to it.
+    template<class Actor, class Entity>
+    inline void BindGrip(Actor* player, Entity* sheath)
+    {
+        player->removeConstraint(17);
+        player->attachObject(17, player->m_pEntity, sheath, 0x701, 10);
+        auto* grip = player->getConstraintById(17);
+        if (grip) {
+            grip->m_vecOffset = decltype(grip->m_vecOffset){0, 0, 0, 0};
+            grip->m_vecRotation = decltype(grip->m_vecRotation){0, 0, 0, 0};
+        }
+    }
     inline bool Code(char* dst, const char* name)
     {
         if (!dst) return false;

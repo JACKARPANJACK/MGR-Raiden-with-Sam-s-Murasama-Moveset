@@ -6,6 +6,10 @@ Non-2xxx DLC animations now route to Sam's motion and sequence assets, including
 finishers and Zandatsu. Seven execution clips intentionally use shared native
 motions with their Sam DLC sequences. Scripted story states retain native routing.
 
+Full controls and move inputs: [Sam movelist](SAM_MOVELIST.md).
+
+Full controls and move inputs: [Sam movelist](SAM_MOVELIST.md).
+
 ## Controls
 
 - **G**: toggle Sam's sword moveset.
@@ -15,6 +19,8 @@ motions with their Sam DLC sequences. Scripted story states retain native routin
 - **D-pad**: native inventory, including the heatknife.
 - **F7 / F8**: previous / next secondary mode; also selectable in the menu.
 - **C / controller subweapon button** with Bladewolf heatblades selected: throw.
+- **F / L3 alone** with Sai equipped: pull an eligible cyborg toward Raiden.
+- **F / L3 alone** with Sai equipped: pull an eligible cyborg toward Raiden.
 - **F** in Sam mode: sweeping finisher against a nearby weak cyborg.
 - **X** or **controller B / Circle** in Sam mode: queue the next lightning ultimate.
 - **Select / Back** or **L3 + R3**: toggle Sam's moveset.
