@@ -2,6 +2,7 @@
 #include "WeaponSwitchPolicy.h"
 #include "SamMovesetManager.h"
 #include "KunaiSubweapon.h"
+#include "DualBladeWeapon.h"
 #include <PlayerManagerImplement.h>
 #include <EntitySystem.h>
 #include <atomic>
@@ -55,6 +56,7 @@ public:
     void Forget(Pl0000* player)
     {
         if(owner!=player) return;
+        DualBladeWeapon::Get().Release(player);
         Cancel(); ReleaseWarm();pending=-1; selected=0; owner=nullptr;
     }
     void RestoreInputs()
@@ -83,7 +85,7 @@ public:
     }
     void Tick(Pl0000* player)
     {
-        if (owner!=player) { Cancel(); ReleaseWarm();pending=-1; selected=0; owner=player; }
+        if (owner!=player) { DualBladeWeapon::Get().Release(owner); Cancel(); ReleaseWarm();pending=-1; selected=0; owner=player; }
         if(!player || !g_pPlayerManager) return;
         DWORD foreground=0;
         GetWindowThreadProcessId(GetForegroundWindow(),&foreground);
@@ -93,19 +95,37 @@ public:
         // G/menu toggles and weapon selection share one source of truth.
         if(Pending()<0)
         {
-            if((sam.IsRequested() || sam.IsEnabled()) && Selected()!=WeaponSwitchPolicy::Heatblades) selected=WeaponSwitchPolicy::Murasama;
+            if((sam.IsRequested() || sam.IsEnabled())) selected=WeaponSwitchPolicy::Murasama;
             else if(Selected()==WeaponSwitchPolicy::Murasama) selected=WeaponSwitchPolicy::Sword;
+            else if(g_pPlayerManager)
+            {
+                int customEquipped = g_pPlayerManager->getCustomWeaponEquipped();
+                if(customEquipped >= 2 && customEquipped <= 5)
+                {
+                    const int targetIndex = WeaponSwitchPolicy::IndexFromCustomEquipped(customEquipped);
+                    if(Selected() != targetIndex)
+                    {
+                        if(Selected() == WeaponSwitchPolicy::DualBlades)
+                            DualBladeWeapon::Get().Release(player);
+                        selected = targetIndex;
+                    }
+                }
+                else if(customEquipped == 0 && WeaponSwitchPolicy::IsCustomWeaponIndex(Selected()))
+                {
+                    selected = WeaponSwitchPolicy::Sword;
+                }
+            }
         }
         const bool scripted=g_StaFlags.STA_QTE||g_StaFlags.STA_EVENT||g_StaFlags.STA_CODEC||g_StaFlags.STA_SOFT_EVENT;
         if(WeaponSwitchPolicy::AcceptInput(foreground==GetCurrentProcessId()&&!gui::IsMenuVisible(),player->isAlive()!=FALSE,scripted,Trigger::StpFlags.STP_OBJ))
         {
-            const int current=Pending()<0?Selected():Pending();
-            const unsigned padPress=WeaponSwitchPolicy::PadPress(g_dbPad.m_On, g_dbPad.m_Trig, previousPad); // D-pad belongs to Raiden's native inventory, but can be configured.
+            const int current=(Pending()<0?Selected():Pending());
+            const unsigned padPress=WeaponSwitchPolicy::PadPress(g_dbPad.m_On, g_dbPad.m_Trig, previousPad);
             previousPad=(g_dbPad.m_On|g_dbPad.m_Trig)&0xF;
             const int input=WeaponSwitchPolicy::InputSelection(current,prev&&!previousDown,next&&!nextDown,padPress);
             if(input>=0) Select(input);
             const int wheel=WeaponSwitchPolicy::WheelSteps(g_Mouse.m_Wheel,wheelRemainder);
-            if(wheel) Select(WeaponSwitchPolicy::Cycle(Pending()<0?Selected():Pending(),wheel));
+            if(wheel) Select(WeaponSwitchPolicy::Cycle((Pending()<0?Selected():Pending()),wheel));
             savedWheel=g_Mouse.m_Wheel;g_Mouse.m_Wheel=0;wheelReserved=true;
             // Q/E remain plugin weapon-cycle controls.
             {
@@ -117,6 +137,8 @@ public:
                 g_dbPad.m_On &= ~padConsume;
                 g_dbPad.m_Trig &= ~padConsume;
                 g_dbPad.m_Rep &= ~padConsume;
+                player->m_CurrentInput.m_On &= ~padConsume;
+                player->m_CurrentInput.m_Trig &= ~padConsume;
                 
                 savedKeyOn=g_Keyboard.m_pOn[2]&KeyMask;
                 savedKeyTrig=g_Keyboard.m_pTrig[2]&KeyMask;
@@ -133,10 +155,12 @@ public:
             }
         }
         else {previousPad=(g_dbPad.m_On|g_dbPad.m_Trig)&0xF;wheelRemainder=0;}
+        if(Selected()!=WeaponSwitchPolicy::DualBlades) DualBladeWeapon::Get().Release(player);
+        else if(!DualBladeWeapon::Get().Active(player)) {selected=WeaponSwitchPolicy::Sword;}
         previousDown=prev; nextDown=next;
         const int target=Pending();
         if(target<0) return;
-        if(target==Selected()) {pending=-1;return;}
+        if(target==Selected()) {if(target!=WeaponSwitchPolicy::DualBlades) DualBladeWeapon::Get().Release(player);pending=-1;return;}
         SamMovesetManager::DebugSnapshot state{};
         SamMovesetManager::Instance().CopyDebugSnapshot(state);
         const bool recovery=SamUltimatePolicy::Attack(player->m_Rno0) && WeaponSwitchPolicy::Recovery(
@@ -145,16 +169,9 @@ public:
             player->isInAir()!=FALSE,Trigger::StpFlags.STP_OBJ||g_StaFlags.STA_QTE||g_StaFlags.STA_EVENT||g_StaFlags.STA_CODEC||g_StaFlags.STA_SOFT_EVENT,
             player->isBladeModeActive()!=FALSE,state.roundTripActive||sam.IsSubweaponActive(),recovery)) return;
         const auto& weapon=WeaponSwitchPolicy::Weapons[target];
+        if(target==WeaponSwitchPolicy::DualBlades && !DualBladeWeapon::Get().Prepare())
+        { if(++waitTicks>600) {DualBladeWeapon::Get().Release(player);Cancel();pending=-1;} return; }
         Warm(target);
-        // This menu entry is a shortcut to the native secondary inventory.
-        // Equipping a knife must not release the currently equipped melee weapon.
-        if (weapon.projectile)
-        {
-            if (!SamResourceManager::Instance().HeatbladesReady()) return;
-            KunaiSubweapon::Get().Select(KunaiPolicy::Heatblades);
-            pending=-1; Cancel(); Warm(Selected());
-            return;
-        }
         if(weapon.sam)
         {
             if(!SamNativeRuntime::Get().Owns(player)) {pending=-1;return;}
@@ -171,28 +188,41 @@ public:
             { if(++waitTicks>600) { Cancel();pending=-1; } return; }
         }
         Entity* entity=nullptr;
-        if(weapon.object && !weapon.projectile)
+        if(target==WeaponSwitchPolicy::DualBlades) {
+            entity=DualBladeWeapon::Get().Create(player);
+            if(!entity) {Cancel();pending=-1;return;}
+        }
+        else if(weapon.object)
         {
             entity=g_EntitySystem.createEntity("Pl0010_SUBWEP1",static_cast<eObjID>(weapon.object),nullptr);
             if(!entity) { Cancel();pending=-1;return; }
         }
         // Leaving Murasama also cancels a pending Sam activation.
+        const int previousSelected = Selected();
+        if(target!=WeaponSwitchPolicy::DualBlades) DualBladeWeapon::Get().Release(player);
         if(!weapon.sam) sam.SetEnabled(player,false);
-        g_pPlayerManager->setCustomWeaponEquipped(weapon.equipped);
+        g_pPlayerManager->setCustomWeaponEquipped(WeaponSwitchPolicy::NativeEquipped(weapon.equipped));
         player->removeConstraint(5);
         reinterpret_cast<void(__thiscall*)(Pl0000*)>(shared::base+0x77D0E0)(player);
         player->field_1420=player->m_CustomWeaponBone;
         // Preserve the actual sword/sheath entities. Native unarmed uses custom
         // weapon 5 + wp2040 and state 1, without the sword-lost hide/drop calls.
         player->m_SwordState=WeaponSwitchPolicy::SwordState(target);
-        if(entity)
+        if(target==WeaponSwitchPolicy::DualBlades) {
+            if(!DualBladeWeapon::Get().Commit(player,entity)) {
+                g_pPlayerManager->setCustomWeaponEquipped(0);
+                player->m_SwordState=0;player->setRno(0,0,0,0);
+                Cancel();pending=-1;return;
+            }
+            DualBladeWeapon::Get().DrawKatana(true);
+        }
+        else if(entity)
         {
-            reinterpret_cast<void(__thiscall*)(Pl0000*)>(shared::base+0x78AAE0)(player);
-            player->removeConstraint(5);
-            player->attachObject(5,player->m_pEntity,entity,player->m_CustomWeaponBone,-1);
-            player->m_CustomWeaponHandle=entity;
-            player->field_1420=player->m_CustomWeaponBone;
-            if(entity->m_pBehavior) { entity->m_pBehavior->m_pOwner=player; entity->m_pBehavior->onDisp(); }
+            if(!WeaponAttachment::Bind(player,entity)) {
+                player->removeConstraint(5);entity->release();
+                g_pPlayerManager->setCustomWeaponEquipped(0);
+                selected=WeaponSwitchPolicy::Sword;Cancel();pending=-1;return;
+            }
         }
         player->setRno(sam.IsEnabled()?0x100000:0,0,0,0);
         if(weapon.sam)
@@ -200,6 +230,6 @@ public:
             sam.SetEnabled(player,true);
             if(!sam.IsEnabled()) return;
         }
-        selected=target; pending=-1; Cancel(); Warm(target);
+        selected=target;  pending=-1; Cancel(); Warm(target);
     }
 };

@@ -59,7 +59,7 @@ public:
 	{
 		if (!player) return 0;
 		Track(player);
-		if (player->isUnarmed())
+		if (player->isUnarmed() || (player->m_CustomWeaponBone == 0x701 && player->m_CustomWeaponHandle.getEntity()))
 			return 0;
 
 		bool hasFlag53 = player->ckSeqFlag(53);

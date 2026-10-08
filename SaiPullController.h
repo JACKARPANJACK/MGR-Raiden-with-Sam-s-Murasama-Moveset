@@ -13,7 +13,10 @@ class SaiPullController {
     unsigned ticks = 0, cooldown = 0, previousPad = 0, delay = 0;
     bool previousKey = false, strikePending = false;
     bool Allowed(Pl0000* player) const {
-        return player && player->m_pEntity && WeaponSwitcher::Get().Selected() == 3 &&
+        DWORD foreground=0;GetWindowThreadProcessId(GetForegroundWindow(),&foreground);
+        return player && player->m_pEntity && g_pPlayerManager &&
+            g_pPlayerManager->getCustomWeaponEquipped()==3 &&
+            !gui::IsMenuVisible() && !g_StaFlags.STA_PAUSE && foreground==GetCurrentProcessId() &&
             SaiPullPolicy::Safe(player->m_Rno0, player->isAlive() != FALSE,
                 player->isInAir() != FALSE, player->isBladeModeActive() != FALSE,
                 g_StaFlags.STA_QTE || g_StaFlags.STA_EVENT || g_StaFlags.STA_CODEC || g_StaFlags.STA_SOFT_EVENT);
@@ -30,6 +33,7 @@ public:
     void ApplyAttackInput(Pl0000* player) {
         if (strikePending && player == owner && Allowed(player)) {
             player->m_CurrentInput.m_Trig |= player->m_ButtonHeavyAttack;
+            player->m_CurrentInput.m_On |= player->m_ButtonHeavyAttack;
             strikePending = false;
         }
     }
@@ -39,9 +43,9 @@ public:
         const unsigned pad = g_dbPad.m_On | g_dbPad.m_Trig;
         const bool press = (key && !previousKey) || ((pad & 0x1000) && !(previousPad & 0x1000) && !(pad & 0x8000));
         previousKey = key; previousPad = pad;
+        if (!Allowed(player)) { Release(); return; }
         if (Trigger::StpFlags.STP_OBJ) return;
         if (cooldown) --cooldown;
-        if (!Allowed(player)) { Release(); return; }
         DWORD foreground = 0; GetWindowThreadProcessId(GetForegroundWindow(), &foreground);
         if (!press || cooldown || gui::IsMenuVisible() || foreground != GetCurrentProcessId()) return;
         // Choose a live whole cyborg in front of Raiden; heavy cyborgs are filtered
@@ -71,10 +75,10 @@ public:
         strikePending = true;
     }
     void PostTick(Pl0000* player) {
-        if (Trigger::StpFlags.STP_OBJ) return;
         Entity* target=victim.getEntity();
         if (!ticks) return;
         if (player != owner || !Allowed(player) || !target || !target->m_pBehavior || !target->isAlive()) { Release(); return; }
+        if (Trigger::StpFlags.STP_OBJ) return;
         if (delay) { --delay; return; }
         auto p=target->getTransPos(); const auto origin=player->m_pEntity->getTransPos();
         const float dx=origin.x-p.x, dz=origin.z-p.z, d=std::sqrt(dx*dx+dz*dz);

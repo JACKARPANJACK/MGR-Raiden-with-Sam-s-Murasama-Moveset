@@ -3,7 +3,7 @@
 
 namespace gui
 {
-    struct SmgView {unsigned rounds=0,reload=0,charge=0;bool ready=false,menuLinked=false;};
+    struct SmgView {unsigned rounds=0,reload=0,charge=0,status=0;bool ready=false,menuLinked=false,aiming=false,locked=false,solved=false;};
     void GetSmgView(SmgView& out);
     int EquippedSecondary();
     int PendingSecondary();
@@ -44,6 +44,7 @@ namespace gui
     void TriggerUltimateNow();
     void RecallRoundTrip();
     int SelectedWeapon();
+    const char* DualBladeStatus();
     int PendingWeapon();
     void SelectWeapon(int index);
     int SelectedKunai();

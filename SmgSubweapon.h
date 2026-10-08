@@ -7,33 +7,51 @@
 #include "EncounterPolicy.h"
 #include "gui.h"
 #include "SamVisualEffects.h"
-#include "NativeSmgAim.h"
+#include "NativeGunPose.h"
+#include "GunRuntimeLog.h"
 #include <cObjReadManager.h>
+#include <Em0010.h>
+#include <BehaviorBalkan.h>
+#include <cCameraGame.h>
 #include <array>
 #include <vector>
 #include <atomic>
+#include <cfloat>
 
 // Enemy gun/model and BulletBase factory; never invoke Em0040 AI on Pl0000.
 class SmgSubweapon
 {
-    struct Resource {unsigned id;bool requested=false,pinned=false,bank=false;Hw::cFmerge archive;};
-    std::array<Resource,4> resources{{{SmgPolicy::Gun},{SmgPolicy::Bullet},{SmgPolicy::MotionBank},{SmgPolicy::EnemyMotionBank}}};
-    struct Shot {EntityHandle handle;unsigned age=0;};
-    std::vector<Shot> shots;
+    struct Resource {unsigned id;bool requested=false,pinned=false,bank=false,registered=false;Hw::cFmerge archive;unsigned retry=0;};
+    std::array<Resource,5> resources{{{SmgPolicy::Gun},{SmgPolicy::Bullet},{SmgPolicy::MotionBank},{SmgPolicy::GunBank},{SmgPolicy::BulletPool}}};
     Pl0000* owner=nullptr;
     EntityHandle gun;
+    EntityHandle bulletPool;
+    EntityHandle hiddenBlade;
+    bool bladeWasVisible=false;
     EntityHandle dumpTarget;
     cEspControler muzzleFlash;
     bool flashActive=false;
     SmgPolicy::FireControl fire;
+    SmgPolicy::SprayGesture sprayGesture;
     int poseNode=-1;
     unsigned poseTicks=0;
-    bool gunPose=false,readyPose=false,poseFrozen=false;
+    bool gunPose=false,readyPose=false,poseFrozen=false,raisingPose=false,stanceRaised=false;
     SmgPolicy::ReadyWindow readyWindow;
-    NativeSmgAim aiming;
+    NativeGunPose visualPose;
+    const char* visualCode=SmgPolicy::IdleMotion;
+    float visualFrame=0, locomotionFrame=0;
+    const char* locomotionCode=SmgPolicy::IdleMotion;
+    float locomotionSpeed=1;
+    EntityHandle aimTarget;
+    Hw::cVec4 aimPoint;
+    bool ikSolved=false;
+    bool gunSummoned=false;
+    unsigned spreadSeed=0x9E3779B9u;
     unsigned animatedCombo=0;
     unsigned preparedDumpCombo=0;
     bool pendingShot=false;
+    bool pendingSpray=false;
+    bool groupSpray=false;
     EntityHandle pendingTarget;
     SmgPolicy::Move pendingMove=SmgPolicy::Burst;
     bool reserved=false;
@@ -42,29 +60,90 @@ class SmgSubweapon
     std::atomic<unsigned> displayRounds{SmgPolicy::Magazine},displayReload{0};
     std::atomic<unsigned> displayCharge{0};
     std::atomic<bool> displayReady{false};
+    std::atomic<bool> displayAim{false},displayLock{false},displaySolved{false};
+    std::atomic<unsigned> displayStatus{0};
     struct Impact {EntityHandle target;unsigned cooldown=0;};
     std::vector<Impact> impacts;
     struct HealthBefore {EntityHandle target;int hp;};
     std::vector<HealthBefore> before;
     static bool Stopped() {return Trigger::StpFlags.STP_OBJ!=0;}
+    static bool RegisterEffects(unsigned id,Hw::cFmerge* archive)
+    {
+        __try {return reinterpret_cast<BOOL(__cdecl*)(unsigned,Hw::cFmerge*)>
+            (shared::base+0xA00C50)(id,archive)!=FALSE;}
+        __except(GunRuntimeLog::Exception(GetExceptionInformation(),"effect registration")) {return false;}
+    }
+    static bool Flash(cEspControler* controller,
+                      const Hw::cVec4& position,const Hw::cVec4& rotation)
+    {
+        __try {
+            alignas(16) unsigned char info[0x150]{};
+            // The behavior constructor copies its entity into ESP slot FF.
+            // Adding a null slot 0 does not remove that binding. Construct a
+            // standalone ESP instead, with no model or entity override.
+            reinterpret_cast<void*(__thiscall*)(void*)>(shared::base+0xA01CA0)(info);
+            reinterpret_cast<void(__thiscall*)(void*,cEspControler*)>(shared::base+0x9FFB20)(info,controller);
+            return reinterpret_cast<BOOL(__cdecl*)(int,int,const Hw::cVec4*,const Hw::cVec4*,void*)>
+                (shared::base+0xA010C0)(SmgPolicy::GunBank,SmgPolicy::MuzzleEffect,&position,&rotation,info)!=FALSE;
+        }
+        __except(GunRuntimeLog::Exception(GetExceptionInformation(),"muzzle flash")) {return false;}
+    }
+    void Status(unsigned value)
+    {
+        if(displayStatus.exchange(value)!=value)
+            GunRuntimeLog::Write("status=%u gun=%p slot=%d",value,gun.getEntity(),
+                g_pPlayerManager?g_pPlayerManager->getSubWeaponEquipped():-1);
+    }
     bool ResourcesReady()
     {
-        // Verify the actual enemy SMG descriptor on this executable before use.
-        const unsigned char objectBytes[]={0xC7,0x44,0x24,0x74,0x46,0x00,0x02,0x00};
-        const unsigned char typeBytes[]={0xC7,0x84,0x24,0x80,0x01,0x00,0x00,0x58,0x00,0x00,0x00};
-        if(std::memcmp(reinterpret_cast<void*>(shared::base+0x71CEA8),objectBytes,sizeof(objectBytes)) ||
-            std::memcmp(reinterpret_cast<void*>(shared::base+0x71CEB0),typeBytes,sizeof(typeBytes))) return false;
+        // Fail closed if the verified rifle descriptor differs on this EXE.
+        const unsigned char rifleProfile[]={0xC7,0x84,0x24,0x68,0x01,0x00,0x00,0x19,0x00,0x00,0x00};
+        if(std::memcmp(reinterpret_cast<void*>(shared::base+0x7383E5),rifleProfile,sizeof(rifleProfile))) {Status(1);return false;}
         bool ready=true;
         for(auto& r:resources)
         {
             const auto id=static_cast<eObjID>(r.id);
-            if(!r.requested) r.requested=g_ObjReadManager.requestObject(id,0)!=FALSE;
-            if(!r.requested || !g_ObjReadManager.isObjectLoaded(id,0)) {ready=false;continue;}
-            if(!r.pinned) {g_ObjReadManager.addUseRef(id,0);r.pinned=true;}
-            const bool needsBank=r.id!=SmgPolicy::Bullet;
-            if(needsBank && !r.bank && g_ObjReadManager.getDataAtSet(r.archive,id,0))
-                r.bank=reinterpret_cast<BOOL(__cdecl*)(unsigned,Hw::cFmerge*)>(shared::base+0xA00C50)(r.id,&r.archive)!=FALSE;
-            ready=(!needsBank || r.bank) && ready;
+            const bool optional=r.id==SmgPolicy::GunBank;
+            GunRuntimeLog::stage="request assets";
+            if(!r.requested)
+            {
+                r.requested=g_ObjReadManager.requestObject(id,0)!=FALSE;
+                if(r.requested) GunRuntimeLog::Write("requested asset=%05X",r.id);
+            }
+            if(!r.requested || !g_ObjReadManager.isObjectLoaded(id,0))
+            {Status(2);ready=false;continue;}
+            if(!r.pinned) {g_ObjReadManager.addUseRef(id,0);r.pinned=true;GunRuntimeLog::Write("loaded asset=%05X",r.id);}
+            const bool needsBank=r.id==SmgPolicy::MotionBank || r.id==SmgPolicy::GunBank;
+            if(r.retry) --r.retry;
+            if(needsBank && !r.bank && !r.retry && g_ObjReadManager.getDataAtSet(r.archive,id,0))
+            {
+                if(r.id==SmgPolicy::MotionBank) r.bank=true; // Motion archive needs no effect registration.
+                else
+                {
+                    GunRuntimeLog::stage="register rifle effects";
+                    r.bank=r.registered=RegisterEffects(r.id,&r.archive);
+                    GunRuntimeLog::Write("effect registration asset=%05X result=%d",r.id,int(r.bank));
+                    if(!r.bank) r.retry=120;
+                }
+            }
+            // The archive supplies the required grip MOT; effect registration alone is optional.
+            ready=(optional || !needsBank || r.bank) && ready;
+        }
+        if(ready)
+        {
+            if(!SamStagePolicy::Length(resources[3].archive.getFileNameData("wp0040_0001.mot")))
+            {Status(3);return false;}
+            for(unsigned i=0;i<16;++i)
+            {
+                char name[40];std::snprintf(name,sizeof(name),"pl0010_2e%02x.gwm",0x40+i);
+                if(!SamStagePolicy::Length(resources[2].archive.getFileNameData(name))) {Status(3);return false;}
+            }
+            for(const char* code:{SmgPolicy::IdleMotion,SmgPolicy::ReadyMotion,SmgPolicy::RaiseMotion,
+                                  SmgPolicy::RecoilMotion,SmgPolicy::ReloadMotion})
+            {
+                char name[40];std::snprintf(name,sizeof(name),"pl0010_%s.gwm",code);
+                if(!SamStagePolicy::Length(resources[2].archive.getFileNameData(name))) {Status(3);return false;}
+            }
         }
         return ready;
     }
@@ -83,91 +162,283 @@ class SmgSubweapon
     }
     bool Equip()
     {
-        if(gun.getEntity()) return true;
+        if(Entity* entity=gun.getEntity();entity && entity->m_pBehavior)
+        {
+            if(owner->getConstraintsEntity(Constraint)==entity) return true;
+            // Generic attachment can be removed by native weapon transitions.
+            if(owner->getConstraintsEntity(Constraint)) {Status(4);return false;}
+            Mount(entity);
+            return owner->getConstraintsEntity(Constraint)==entity;
+        }
         // Do not steal a constraint used by another plugin/native controller.
-        if(owner->getConstraintsEntity(Constraint)) return false;
-        Entity* entity=g_EntitySystem.createEntity("Emc040_Smg",static_cast<eObjID>(SmgPolicy::Gun),nullptr);
-        if(!entity || !entity->m_pBehavior) {if(entity) entity->release();return false;}
+        if(owner->getConstraintsEntity(Constraint)) {Status(4);return false;}
+        GunRuntimeLog::stage="create rifle";
+        Entity* entity=g_EntitySystem.createEntity(SmgPolicy::GunContext,static_cast<eObjID>(SmgPolicy::Gun),nullptr);
+        if(!entity || !entity->m_pBehavior) {if(entity) entity->release();Status(5);return false;}
+        GunRuntimeLog::Write("created gun=%p behavior=%p context=%s",entity,entity->m_pBehavior,SmgPolicy::GunContext);
         gun=entity;entity->m_pBehavior->m_pOwner=owner;
+        // The native cyborg equip path also fills cEm0010Weapon::field_8CC
+        // (73A73E / 73A9ED). Its update at 7324E7 drops an unbound rifle.
+        static_cast<cEm0010Weapon*>(entity->m_pBehavior)->field_8CC=owner->m_pEntity;
         auto initial=owner->m_pEntity->getTransPos();initial.y+=1.1f;
         entity->setTransPos(initial);entity->setRot(owner->m_Rot);
-        // Native SMG mounts on right-hand marker 701 (7060B2).
-        owner->attachObject(Constraint,owner->m_pEntity,entity,0x701,-1);
+        GunRuntimeLog::stage="attach rifle";
+        Mount(entity);
         entity->m_pBehavior->onDisp();
+        GunRuntimeLog::Write("attached constraint=%u actual=%p muzzle=%p",Constraint,
+            owner->getConstraintsEntity(Constraint),entity->m_pBehavior->getPartsPtr(SmgPolicy::Muzzle));
+        if(owner->getConstraintsEntity(Constraint)!=entity) {Status(4);return false;}
         return true;
     }
-    bool OwnsPose() const
+    void Mount(Entity* entity)
     {
-        return owner && poseTicks && owner->m_pAnimationSlot && owner->m_pAnimationSlot->m_pArray &&
-            owner->m_pAnimationSlot->m_pArray[0].m_SlotId==poseNode &&
-            !std::strcmp(owner->m_pAnimationSlot->m_pArray[0].m_pAnimName,"Direct");
+        // Native rifle equip (73A3FF..73A438): LEFT wrist 9 and weapon
+        // motion 0001. 0000 is the holstered pose, not a hand offset.
+        void* grip=resources[3].archive.getFileNameData("wp0040_0001.mot");
+        if(!grip) {Status(3);return;}
+        auto* weapon=static_cast<cEm0010Weapon*>(entity->m_pBehavior);
+        if(weapon->setDirectAnimation(grip,nullptr,0,0,1,0x8000000,0,1)<0) {Status(3);return;}
+        weapon->field_8C0=0;weapon->field_8C4=1;weapon->m_Rno0=0;
+        owner->attachObject(Constraint,owner->m_pEntity,entity,9,-1);
+        // The native weapon MOT supplies all local offsets exactly once.
+        if(auto* mount=owner->getConstraintById(Constraint))
+        {
+            mount->m_vecRotation=Hw::cVec4(0,0,0,0);
+            mount->m_vecOffset=Hw::cVec4(0,0,0,0);
+        }
     }
+    bool OwnsPose() const { return gunPose && poseTicks!=0; }
     void EndPose()
     {
-        if(OwnsPose() && owner->isAlive() && !owner->isInAir() &&
-            !EncounterPolicy::Scripted(g_StaFlags.STA_EVENT,g_StaFlags.STA_QTE,g_StaFlags.STA_CODEC,g_StaFlags.STA_SOFT_EVENT)) owner->requestAnimationByMap(4);
-        aiming.Reset();
-        poseTicks=0;poseNode=-1;gunPose=readyPose=poseFrozen=false;
+        visualPose.BeginFrame();
+        if(!IsEquipped())
+        {
+            if(Entity* blade=hiddenBlade.getEntity();blade && blade->m_pBehavior && bladeWasVisible)
+                blade->m_pBehavior->onDisp();
+            hiddenBlade=EntityHandle{};bladeWasVisible=false;
+        }
+        poseTicks=0;poseNode=-1;gunPose=readyPose=poseFrozen=reloadPose=false;
+        raisingPose=false;
+    }
+    void DisplayGunPose()
+    {
+        if(!owner || !IsEquipped()) return;
+        if(Entity* model=gun.getEntity();model && model->m_pBehavior)
+        {
+            if(gunSummoned && Neutral()) model->m_pBehavior->onDisp();else model->m_pBehavior->offDisp();
+        }
+        if(!gunSummoned || !Neutral())
+        {
+            if(Entity* blade=hiddenBlade.getEntity();blade && blade->m_pBehavior && bladeWasVisible)
+                blade->m_pBehavior->onDisp();
+            hiddenBlade=EntityHandle{};bladeWasVisible=false;return;
+        }
+        Entity* blade=owner->m_pBladeEntity?owner->m_pBladeEntity:owner->m_SwordHandle.getEntity();
+        if(!blade || !blade->m_pBehavior) return;
+        if(hiddenBlade.getEntity()!=blade)
+        {
+            hiddenBlade=blade;bladeWasVisible=(blade->m_pBehavior->m_ObjectFlags&1)!=0;
+        }
+        blade->m_pBehavior->offDisp();
     }
     bool Neutral() const
     {
-        const unsigned interrupt=owner->m_ButtonLightAttack|owner->m_ButtonHeavyAttack|
-            owner->m_ButtonJump|owner->m_ButtonNinjarun|owner->m_ButtonBlademode;
-        return !owner->isBladeModeActive() && !owner->isInAir() &&
-            (owner->m_Rno0<=4 || owner->m_Rno0==0x100000) &&
-            !(owner->m_CurrentInput.m_On&interrupt) &&
-            std::abs(owner->m_TransSpeed.x)+std::abs(owner->m_TransSpeed.z)<0.003f &&
-            !(GetAsyncKeyState('W')&0x8000 || GetAsyncKeyState('A')&0x8000 ||
-              GetAsyncKeyState('S')&0x8000 || GetAsyncKeyState('D')&0x8000);
+        return !owner->isBladeModeActive() &&
+            EncounterPolicy::CanThrow(owner->m_Rno0,owner->isAlive()!=FALSE,owner->isInAir()!=FALSE,false,false);
     }
-    void AimAt(Entity* target)
+    bool GroundLocomotion() const
     {
-        if(!gunPose || !OwnsPose()) return;
-        auto aim=target?target->getTransPos():owner->m_pEntity->getTransPos();
-        if(target)
+        const unsigned interrupt=owner->m_ButtonLightAttack|owner->m_ButtonHeavyAttack|owner->m_ButtonJump;
+        return locomotionCode && !owner->isInAir() && (owner->m_Rno0<=4 || owner->m_Rno0==0x100000) &&
+            !(owner->m_CurrentInput.m_On&interrupt);
+    }
+    struct LockTargetInfo
+    {
+        bool hasLock = false;
+        Entity* enemy = nullptr;
+        Hw::cVec4 position{};
+    };
+
+    static LockTargetInfo GetLockOnTargetInfo(Pl0000* player)
+    {
+        LockTargetInfo info{};
+        if (g_GameCamera.m_LockonSystem.m_nLockType != 0)
         {
-            aim.y+=0.8f;
-            if(Neutral())
+            Entity* targetEnt = g_GameCamera.m_LockonSystem.m_TargetEntity.getEntity();
+            if (!targetEnt && g_GameCamera.m_LockonSystem.m_pTarget)
+                targetEnt = g_GameCamera.m_LockonSystem.m_pTarget->m_pEntity;
+            
+            if (targetEnt && SamTargets::Enemy(targetEnt) && targetEnt->m_pBehavior &&
+                static_cast<BehaviorAppBase*>(targetEnt->m_pBehavior)->m_Hp > 0)
             {
-                const auto position=owner->m_pEntity->getTransPos();
-                const float dx=aim.x-position.x,dz=aim.z-position.z;
-                if(dx*dx+dz*dz>0.01f)
-                {owner->m_Rot.y=std::atan2(dx,dz);owner->m_pEntity->setRot(owner->m_Rot);}
+                info.hasLock = true;
+                info.enemy = targetEnt;
+                const auto& lpos = g_GameCamera.m_LockonSystem.m_vecPosition;
+                if (std::isfinite(lpos.x) && std::isfinite(lpos.y) && std::isfinite(lpos.z) &&
+                    (lpos.x != 0.0f || lpos.y != 0.0f || lpos.z != 0.0f))
+                {
+                    info.position = lpos;
+                }
+                else
+                {
+                    Hw::cVec4 p = targetEnt->getTransPos();
+                    p.y += 0.8f;
+                    info.position = p;
+                }
+                return info;
             }
         }
-        else {aim.x+=std::sin(owner->m_Rot.y)*SmgPolicy::Range;aim.z+=std::cos(owner->m_Rot.y)*SmgPolicy::Range;aim.y+=1.1f;}
-        aiming.Aim(aim);
-    }
-    void Animate(bool firingRecoil=false,bool ready=false,bool raise=false)
-    {
-        if(owner->isBladeModeActive() || owner->isInAir() ||
-            !(owner->m_Rno0<=4 || owner->m_Rno0==0x100000)) return;
-        // Motion only: these Raiden clips contain scripted RPG callbacks in their sequences.
-        // Let the independent projectile controller own every shot.
-        aiming.Reset();
-        if(poseFrozen && OwnsPose()) owner->setNodePlaybackSpeed(poseNode,1);
-        poseFrozen=false;
-        const bool special=fire.comboPose && !firingRecoil && !ready && !raise;
-        if(!special && !Neutral()) return;
-        const char* code=special?fire.AnimationCode():raise?SmgPolicy::RaiseMotion:ready?SmgPolicy::ReadyMotion:"2400";
-        char name[40];std::snprintf(name,sizeof(name),"%s_%s.mot",special?"pl0010":"em0040",code);
-        void* motion=resources[special?2:3].archive.getFileNameData(name);
-        const unsigned length=SamStagePolicy::Length(motion);if(!length) return;
-        const float speed=special?2.8f:raise?2.0f:1.0f;
-        poseNode=owner->setDirectAnimation(motion,nullptr,0,0.06f,1,0x8000000,0,speed);
-        if(poseNode>=0)
+        if (player)
         {
-            poseTicks=unsigned(std::ceil(length/speed));gunPose=!special;readyPose=ready;
-            if(gunPose) aiming.Bind(owner);
-            if(special) fire.delay=unsigned(std::ceil(SmgPolicy::MotionRelease(code)/speed));
+            Entity* zTarget = player->field_1370.m_TargetHandle.getEntity();
+            if (zTarget && SamTargets::Enemy(zTarget) && zTarget->m_pBehavior &&
+                static_cast<BehaviorAppBase*>(zTarget->m_pBehavior)->m_Hp > 0)
+            {
+                info.hasLock = true;
+                info.enemy = zTarget;
+                Hw::cVec4 p = zTarget->getTransPos();
+                p.y += 0.8f;
+                info.position = p;
+                return info;
+            }
+        }
+        return info;
+    }
+
+    struct VisibleEnemy {Entity* entity;Hw::cVec4 point;float x,score;};
+    bool VisiblePoint(const Hw::cVec4& point,float width,float height,const Hw::cVec4& ray,Hw::cVec4& screen) const
+    {
+        const auto& camera=g_GameCamera.m_Trans;
+        const float depth=(point.x-camera.x)*ray.x+(point.y-camera.y)*ray.y+(point.z-camera.z)*ray.z;
+        const bool projected=g_GameCamera.worldToScreen(screen,point)!=FALSE;
+        return SmgPolicy::OnScreen(projected,depth,screen.x,screen.y,width,height);
+    }
+    void AimAtUnbounded()
+    {
+        const auto playerPosition=owner->m_pEntity->getTransPos();
+        const int width=reinterpret_cast<int(__cdecl*)()>(shared::base+0xB98A90)();
+        const int height=reinterpret_cast<int(__cdecl*)()>(shared::base+0xB98AA0)();
+        aimTarget=EntityHandle{};groupSpray=false;
+        aimPoint=playerPosition;aimPoint.x+=std::sin(owner->m_Rot.y)*SmgPolicy::Range;
+        aimPoint.z+=std::cos(owner->m_Rot.y)*SmgPolicy::Range;aimPoint.y+=1.3f;
+        if(width<=0 || height<=0) return;
+        Hw::cVec4 world(0,0,0,1);
+        g_GameCamera.screenToWorld(world,Hw::cVec4(width*.5f,height*.5f,.5f,1));
+        const auto& c=g_GameCamera.m_Trans;
+        D3DXVECTOR3 direction(world.x-c.x,world.y-c.y,world.z-c.z),point;
+        if(!GunAimMath::CameraPoint(D3DXVECTOR3(c.x,c.y,c.z),direction,
+            D3DXVECTOR3(playerPosition.x,playerPosition.y,playerPosition.z),point)) return;
+        aimPoint=Hw::cVec4(point.x,point.y,point.z,1);
+
+        // Lock targets are candidates, never an exception to visibility.
+        const auto lockInfo = GetLockOnTargetInfo(owner);
+        // 2. Camera direction for visible on-screen detection
+        const auto& camTar = g_GameCamera.m_Target;
+        D3DXVECTOR3 camDir(camTar.x - c.x, camTar.y - c.y, camTar.z - c.z);
+        const float camLenSq = D3DXVec3LengthSq(&camDir);
+        if (camLenSq > 0.0001f) D3DXVec3Normalize(&camDir, &camDir);
+        else
+        {
+            D3DXVec3Normalize(&direction, &direction);
+            camDir = direction;
+        }
+
+        // 3. Scan for live enemies visible strictly on the camera view
+        std::vector<VisibleEnemy> visible;
+        auto& list=g_EntitySystem.getEntityList();auto it=list.begin();
+        const int maxCount = (std::min)(8192, list.getSize());
+        for(int i=0;i<maxCount && it!=Hw::cFixedList<Entity*>::iterator{};++i,++it)
+        {
+            Entity* enemy=*it;
+            if(!SamTargets::Enemy(enemy)) continue;
+            auto* actor = static_cast<BehaviorAppBase*>(enemy->m_pBehavior);
+            if(!actor || actor->m_Hp<=0) continue;
+
+            auto p=enemy->getTransPos();p.y+=.8f;
+            const float dx=p.x-playerPosition.x,dy=p.y-playerPosition.y,dz=p.z-playerPosition.z;
+            if(dx*dx+dy*dy+dz*dz>SmgPolicy::Range*SmgPolicy::Range) continue;
+
+            // Strict check: must be in front of the camera (never behind screen!)
+            const float cdx = p.x - c.x, cdy = p.y - c.y, cdz = p.z - c.z;
+            const float camDot = cdx * camDir.x + cdy * camDir.y + cdz * camDir.z;
+            if (camDot <= 0.5f) continue;
+
+            const float distCamSq = cdx * cdx + cdy * cdy + cdz * cdz;
+            if (distCamSq < 0.25f) continue;
+            const float alignment = camDot / std::sqrt(distCamSq);
+
+
+            Hw::cVec4 screen;
+            if(!VisiblePoint(p,float(width),float(height),Hw::cVec4(camDir.x,camDir.y,camDir.z,0),screen)) continue;
+
+            const float sx = screen.x / float(width) - 0.5f, sy = screen.y / float(height) - 0.5f;
+            const float screenDistSq = sx * sx + sy * sy;
+            const float score = (1.0f - alignment) * 100.0f + screenDistSq * 10.0f + std::sqrt(dx * dx + dy * dy + dz * dz) * 0.1f;
+            const float playerYaw=std::atan2(p.x-playerPosition.x,p.z-playerPosition.z);
+            if(std::abs(GunAimMath::Wrap(playerYaw-owner->m_Rot.y))>1.047198f) continue;
+            visible.push_back({enemy, p, screen.x, score});
+        }
+
+        if(visible.empty()) return;
+
+        groupSpray = visible.size() > 1;
+        VisibleEnemy* selected = nullptr;
+        const bool wide=sprayGesture.active;
+        if(!wide && lockInfo.hasLock)
+            for(auto& enemy:visible) if(enemy.entity==lockInfo.enemy)
+            {selected=&enemy;groupSpray=false;break;}
+        if(!selected && groupSpray)
+        {
+            // Spraying sweeps across all visible enemies on screen
+            std::sort(visible.begin(), visible.end(), [](const auto& a, const auto& b) { return a.x < b.x; });
+            selected = &visible[SmgPolicy::SprayIndex(fire.ordinal, unsigned(visible.size()))];
+        }
+        else if(!selected)
+        {
+            selected=&*std::min_element(visible.begin(),visible.end(),[](const auto& a,const auto& b){return a.score<b.score;});
+        }
+
+        if(selected)
+        {
+            aimTarget = selected->entity;
+            aimPoint = selected->point;
         }
     }
-    bool Spawn(Entity* target,SmgPolicy::Move move)
+    void AimAt()
+    {
+        AimAtUnbounded();
+        if(!owner) return;
+        const auto position=owner->m_pEntity->getTransPos();
+        const float dx=aimPoint.x-position.x,dz=aimPoint.z-position.z;
+        const float relative=GunAimMath::Wrap(std::atan2(dx,dz)-owner->m_Rot.y);
+        const float yaw=owner->m_Rot.y+(std::clamp)(relative,-1.047198f,1.047198f);
+        const float range=(std::max)(1.0f,std::hypot(dx,dz));
+        aimPoint.x=position.x+std::sin(yaw)*range;
+        aimPoint.z=position.z+std::cos(yaw)*range;
+    }
+    float NextSpread()
+    {
+        spreadSeed^=spreadSeed<<13;spreadSeed^=spreadSeed>>17;spreadSeed^=spreadSeed<<5;
+        return float(spreadSeed>>8)*(1.0f/16777216.0f);
+    }
+    bool reloadPose=false;
+    void Animate(bool firingRecoil=false,bool ready=false,bool raise=false,bool reload=false)
+    {
+        if(!Neutral()) return;
+        visualCode=reload?SmgPolicy::ReloadMotion:raise?SmgPolicy::RaiseMotion:SmgPolicy::ReadyMotion;
+        void* motion=GetVisualMotion(visualCode);
+        const unsigned length=SamStagePolicy::Length(motion);if(!length) return;
+        visualFrame=0;
+        poseTicks=reload?SmgPolicy::Reload:raise?SmgPolicy::RaiseTicks:length;
+        gunPose=true;readyPose=ready;reloadPose=reload;raisingPose=raise;
+    }
+    bool Spawn(Entity* target,SmgPolicy::Move move,bool spray)
     {
         Entity* model=gun.getEntity();
-        if(!model || !model->m_pBehavior || shots.size()>=SmgPolicy::MaxShots) return false;
+        if(!model || !model->m_pBehavior) return false;
         cParts* muzzle=model->m_pBehavior->getPartsPtr(SmgPolicy::Muzzle);
-        if(!muzzle) return false; // Never silently fall back to firing from the player/root.
+        if(!muzzle) {Status(6);return false;}
+        GunRuntimeLog::stage="construct bullet descriptor";
         alignas(16) std::array<unsigned char,0x320> descriptor{};
         auto* data=descriptor.data();using Init=void(__thiscall*)(void*);
         reinterpret_cast<Init>(shared::base+0x105D0)(data+0x10);
@@ -184,53 +455,133 @@ class SmgSubweapon
         *reinterpret_cast<unsigned*>(data+0x170)=*category;
         const float yaw=owner->m_Rot.y;
         Hw::cVec4 origin=muzzle->getPos();origin.w=1;
-        Hw::cVec4 aim(origin.x+std::sin(yaw)*SmgPolicy::Range,origin.y,origin.z+std::cos(yaw)*SmgPolicy::Range,1);
-        if(SamTargets::Enemy(target)) {aim=target->getTransPos();aim.y+=0.8f;}
+        const auto& matrix=muzzle->m_LocalMatrix;
+        origin.x+=matrix.r[1].x*SmgPolicy::MuzzleUp+matrix.r[2].x*SmgPolicy::MuzzleForward;
+        origin.y+=matrix.r[1].y*SmgPolicy::MuzzleUp+matrix.r[2].y*SmgPolicy::MuzzleForward;
+        origin.z+=matrix.r[1].z*SmgPolicy::MuzzleUp+matrix.r[2].z*SmgPolicy::MuzzleForward;
+        // The current camera selection is authoritative, including while the
+        // smoothed running pose is still turning toward the shot direction.
+        Hw::cVec4 aim=aimPoint;
+        if(spray)
+        {
+            if(!target)
+            {
+                const int width=reinterpret_cast<int(__cdecl*)()>(shared::base+0xB98A90)();
+                const int height=reinterpret_cast<int(__cdecl*)()>(shared::base+0xB98AA0)();
+                if(width>0 && height>0)
+                {
+                    Hw::cVec4 world;g_GameCamera.screenToWorld(world,Hw::cVec4(width*(.2f+.6f*NextSpread()),height*(.35f+.3f*NextSpread()),.5f,1));
+                    const auto& c=g_GameCamera.m_Trans;D3DXVECTOR3 point;
+                    const auto p=owner->m_pEntity->getTransPos();
+                    if(GunAimMath::CameraPoint({c.x,c.y,c.z},{world.x-c.x,world.y-c.y,world.z-c.z},{p.x,p.y,p.z},point))
+                        aim=Hw::cVec4(point.x,point.y,point.z,1);
+                }
+            }
+            else
+            {
+                const float spreadX = (NextSpread() - 0.5f) * 0.8f;
+                const float spreadY = (NextSpread() - 0.5f) * 0.4f;
+                aim.x += matrix.r[0].x * spreadX + matrix.r[1].x * spreadY;
+                aim.y += matrix.r[0].y * spreadX + matrix.r[1].y * spreadY;
+                aim.z += matrix.r[0].z * spreadX + matrix.r[1].z * spreadY;
+            }
+        }
+        // Free spray uses camera rays too; bound the final projectile after
+        // spread so a camera behind Raiden cannot emit backwards shots.
+        const float shotX=aim.x-origin.x,shotZ=aim.z-origin.z;
+        const float shotYaw=owner->m_Rot.y+(std::clamp)(GunAimMath::Wrap(
+            std::atan2(shotX,shotZ)-owner->m_Rot.y),-1.047198f,1.047198f);
+        const float shotRange=(std::max)(1.0f,std::hypot(shotX,shotZ));
+        aim.x=origin.x+std::sin(shotYaw)*shotRange;
+        aim.z=origin.z+std::cos(shotYaw)*shotRange;
         const float dx=aim.x-origin.x,dy=aim.y-origin.y,dz=aim.z-origin.z;
         Hw::cVec4 rot(-std::atan2(dy,std::sqrt(dx*dx+dz*dz)),std::atan2(dx,dz),0,0);
         using Trajectory=void(__thiscall*)(void*,Hw::cVec4*,Hw::cVec4*,Hw::cVec4*,float,float);
-        reinterpret_cast<Trajectory>(shared::base+0x16E30)(data,&origin,&aim,&rot,1.0f,250.0f);
-        Behavior* bullet=reinterpret_cast<Behavior*(__cdecl*)(Entity*,void*)>(shared::base+0x6D3BE0)(owner->m_pEntity,data);
-        if(!bullet || !bullet->m_pEntity) return false;
-        if(unsigned(bullet->m_pEntity->m_ObjId)!=SmgPolicy::Bullet)
-        {bullet->m_pEntity->release();return false;}
-        SamVisualEffects::Spawn(model->m_pBehavior,model,SmgPolicy::Gun,SmgPolicy::MuzzleEffect,&muzzleFlash);
-        flashActive=true;
-        Shot shot;shot.handle=bullet->m_pEntity;shots.push_back(shot);return true;
-    }
-    Entity* Acquire(bool sweep)
-    {
-        std::array<Entity*,3> targets{};std::array<float,3> distances{1e9f,1e9f,1e9f};
-        const auto pos=owner->m_pEntity->getTransPos();
-        auto& list=g_EntitySystem.getEntityList();auto it=list.begin();
-        for(int i=0;i<(std::min)(8192,list.getSize()) && it!=Hw::cFixedList<Entity*>::iterator{};++i,++it)
+        reinterpret_cast<Trajectory>(shared::base+0x16E30)(data,&origin,&aim,&rot,SmgPolicy::TrajectoryScale,SmgPolicy::BulletSpeed);
+        // Em0010 emits through BehaviorBalkan (6E2BC0 -> 6E0640), whose
+        // etb000 geometry renders the native rifle rounds. wpb000 has no model.
+        GunRuntimeLog::stage="load native rifle bullet pool";
+        if(!g_pPlayerManager) {Status(7);return false;}
+        Entity* pool=g_pPlayerManager->getBalkanEntity();
+        if(!pool) {g_pPlayerManager->createBalkanEntity();pool=g_pPlayerManager->getBalkanEntity();}
+        if(!pool || !pool->m_pBehavior || unsigned(pool->m_ObjId)!=SmgPolicy::BulletPool) {Status(7);return false;}
+        auto* balkan=static_cast<BehaviorBalkan*>(pool->m_pBehavior);
+        int index=-1;
+        for(int i=0;i<250;++i) if(!(balkan->field_1230[i].field_0&1)) {index=i;break;}
+        if(index<0) {Status(7);return false;}
+        GunRuntimeLog::stage="emit native rifle bullet";
+        reinterpret_cast<void(__thiscall*)(BehaviorBalkan*,Entity*,void*)>(shared::base+0x6E0640)
+            (balkan,owner->m_pEntity,data);
+        const auto& emitted=balkan->field_1230[index];
+        if(!(emitted.field_0&1) || emitted.field_360.getEntity()!=owner->m_pEntity) {Status(7);return false;}
+        bulletPool=pool;
+        Status(resources[3].registered?8:9);
+        GunRuntimeLog::Write("pooled bullet=%d owner=%p origin=%.3f,%.3f,%.3f yaw=%.3f",index,
+            emitted.field_360.getEntity(),origin.x,origin.y,origin.z,yaw);
+        // Commit the native projectile independently of cosmetic effects.
+        fire.Fired();readyWindow.Fired();displayRounds=fire.rounds;displayReload=fire.reload;
+        if(resources[3].registered)
         {
-            Entity* candidate=*it;if(!SamTargets::Enemy(candidate) || static_cast<BehaviorAppBase*>(candidate->m_pBehavior)->m_Hp<=0) continue;
-            const auto p=candidate->getTransPos();float dx=p.x-pos.x,dz=p.z-pos.z,dy=p.y-pos.y;
-            const float distance=dx*dx+dy*dy+dz*dz;
-            if(distance>SmgPolicy::Range*SmgPolicy::Range || dx*std::sin(owner->m_Rot.y)+dz*std::cos(owner->m_Rot.y)<-0.5f) continue;
-            for(unsigned j=0;j<targets.size();++j) if(distance<distances[j])
+            GunRuntimeLog::stage="muzzle flash";
+            if(flashActive)
             {
-                for(unsigned k=unsigned(targets.size())-1;k>j;--k) {targets[k]=targets[k-1];distances[k]=distances[k-1];}
-                targets[j]=candidate;distances[j]=distance;break;
+                reinterpret_cast<void(__thiscall*)(cEspControler*)>(shared::base+0xAAA9B0)(&muzzleFlash);
+                reinterpret_cast<void(__thiscall*)(cEspControler*)>(shared::base+0xAAA060)(&muzzleFlash);
+                flashActive=false;
             }
+            const Hw::cVec4 flashRotation(-std::atan2(matrix.r[2].y,
+                std::sqrt(matrix.r[2].x*matrix.r[2].x+matrix.r[2].z*matrix.r[2].z)),
+                std::atan2(matrix.r[2].x,matrix.r[2].z),0,0);
+            flashActive=Flash(&muzzleFlash,origin,flashRotation);
         }
-        unsigned count=0;while(count<targets.size() && targets[count]) ++count;
-        return count ? targets[sweep?fire.ordinal%count:0] : nullptr;
+        return true;
     }
     void Reserve()
     {
-        mask=owner->m_ButtonUseSubweapon&~0xFu;
+        // Reserve firing only. Composite native button bindings must never
+        // consume movement, sprint, jump, or melee input.
+        mask=SmgPolicy::FireInputMask(owner->m_ButtonUseSubweapon,owner->m_ButtonNinjarun,
+            owner->m_ButtonJump,owner->m_ButtonLightAttack,owner->m_ButtonHeavyAttack,owner->m_ButtonBlademode);
         padOn=g_dbPad.m_On&mask;padTrig=g_dbPad.m_Trig&mask;padRep=g_dbPad.m_Rep&mask;
         keyOn=g_Keyboard.m_pOn[2]&Key;keyTrig=g_Keyboard.m_pTrig[2]&Key;keyRep=g_Keyboard.m_pRep[2]&Key;
         g_dbPad.m_On&=~mask;g_dbPad.m_Trig&=~mask;g_dbPad.m_Rep&=~mask;
         g_Keyboard.m_pOn[2]&=~Key;g_Keyboard.m_pTrig[2]&=~Key;g_Keyboard.m_pRep[2]&=~Key;
-        owner->m_CurrentInput.m_On&=~owner->m_ButtonUseSubweapon;
-        owner->m_CurrentInput.m_Trig&=~owner->m_ButtonUseSubweapon;reserved=true;
+        // The game builds current input from the reserved global sources.
+        // Do not mutate its persistent player input snapshot.
+        reserved=true;
     }
 public:
+    bool IsEquipped() const { return owner!=nullptr && gun.getEntity()!=nullptr && displayReady.load(); }
+    bool IsStationary() const
+    {
+        if(!owner) return true;
+        const bool keyboardMove=(GetAsyncKeyState('W')&0x8000) || (GetAsyncKeyState('A')&0x8000) ||
+                                (GetAsyncKeyState('S')&0x8000) || (GetAsyncKeyState('D')&0x8000);
+        return SmgPolicy::Stationary(owner->m_fInputMagnitudeSquared,
+            g_dbPad.m_LeftStick.x,g_dbPad.m_LeftStick.y,keyboardMove,
+            owner->m_TransSpeed.x,owner->m_TransSpeed.z);
+    }
+    void* GetMotion(const char* code)
+    {
+        if(!code || !resources[2].bank) return nullptr;
+        char name[40]; std::snprintf(name, sizeof(name), "pl0010_%s.mot", code);
+        return resources[2].archive.getFileNameData(name);
+    }
+    void ObserveAnimation(const char* name,int node,float start,float speed)
+    {
+        if(node!=0) return;
+        const char* code=SmgPolicy::Resolve(name);
+        locomotionCode=code;locomotionSpeed=speed; // Native graph restarts do not reset the visual stride.
+    }
+    void* GetVisualMotion(const char* code)
+    {
+        if(!code || !resources[2].bank) return nullptr;
+        char name[40];std::snprintf(name,sizeof(name),"pl0010_%s.gwm",code);
+        return resources[2].archive.getFileNameData(name);
+    }
     void View(gui::SmgView& out) const
-    {out.rounds=displayRounds.load();out.reload=displayReload.load();out.charge=displayCharge.load();out.ready=displayReady.load();}
+    {out.rounds=displayRounds.load();out.reload=displayReload.load();out.charge=displayCharge.load();out.ready=displayReady.load();out.status=displayStatus.load();
+     out.aiming=displayAim.load();out.locked=displayLock.load();out.solved=displaySolved.load();}
     void RestoreInputs()
     {
         if(!reserved) return;
@@ -238,12 +589,33 @@ public:
         g_Keyboard.m_pOn[2]=(g_Keyboard.m_pOn[2]&~Key)|keyOn;g_Keyboard.m_pTrig[2]=(g_Keyboard.m_pTrig[2]&~Key)|keyTrig;
         g_Keyboard.m_pRep[2]=(g_Keyboard.m_pRep[2]&~Key)|keyRep;reserved=false;
     }
-    void Deactivate() {RestoreInputs();fire.Cancel();readyWindow.Cancel();pendingShot=false;pendingTarget=EntityHandle{};dumpTarget=EntityHandle{};EndPose();HideGun();displayReady=false;displayCharge=0;}
+    void Deactivate()
+    {
+        RestoreInputs();
+        fire.Cancel();
+        sprayGesture.Reset();
+        gunSummoned=false;
+        displayAim=false;displayLock=false;displaySolved=false;
+        readyWindow.Cancel();
+        pendingShot=false;
+        pendingTarget=EntityHandle{};
+        dumpTarget=EntityHandle{};
+        if(Entity* blade=hiddenBlade.getEntity();blade && blade->m_pBehavior && bladeWasVisible)
+            blade->m_pBehavior->onDisp();
+        hiddenBlade=EntityHandle{};
+        bladeWasVisible=false;
+        displayReady=false; // Cancellation must bypass gun motion remapping.
+        EndPose();
+        visualPose.Reset();
+        stanceRaised=false;
+        HideGun();
+        displayReady=false;
+        displayCharge=0;
+    }
     void Forget(Pl0000* player)
     {
         if(owner!=player) return;
-        Deactivate();for(auto& s:shots) if(Entity* e=s.handle.getEntity()) e->release();
-        shots.clear();impacts.clear();before.clear();owner=nullptr;fire={};
+        Deactivate();bulletPool=EntityHandle{};impacts.clear();before.clear();owner=nullptr;fire={};
         animatedCombo=preparedDumpCombo=0;
     }
     // Only after native player teardown, as for Sam/knife archive references.
@@ -251,18 +623,23 @@ public:
     {
         for(auto& r:resources)
         {
-            if(r.bank) reinterpret_cast<void(__cdecl*)(unsigned,Hw::cFmerge*)>(shared::base+0xA00D60)(r.id,&r.archive);
+            if(r.registered) reinterpret_cast<void(__cdecl*)(unsigned,Hw::cFmerge*)>(shared::base+0xA00D60)
+                (r.id,&r.archive);
             if(r.pinned) g_ObjReadManager.removeReference(static_cast<eObjID>(r.id),0);
             if(r.requested) g_ObjReadManager.removeRequest(static_cast<eObjID>(r.id),0);
-            r.bank=r.pinned=r.requested=false;
+            r.bank=r.registered=r.pinned=r.requested=false;r.retry=0;
         }
     }
     void Tick(Pl0000* player,bool selected)
     {
+        visualPose.BeginFrame();
+        if(GunRuntimeLog::selected!=selected)
+        {GunRuntimeLog::selected=selected;GunRuntimeLog::Write("selected=%d build=gun-runtime-20 player=%p",int(selected),player);}
+        GunRuntimeLog::stage="gun eligibility";
         pendingShot=false;pendingTarget=EntityHandle{};
         if(owner!=player) {if(owner) Forget(owner);owner=player;}
         before.clear();
-        if(!shots.empty() || selected)
+        if(bulletPool.getEntity() || selected)
         {
             auto& list=g_EntitySystem.getEntityList();auto it=list.begin();
             for(int i=0;i<(std::min)(8192,list.getSize()) && it!=Hw::cFixedList<Entity*>::iterator{};++i,++it)
@@ -278,71 +655,113 @@ public:
         const bool eligible=player && player->m_pEntity && SamNativeRuntime::Get().Owns(player) &&
             foreground==GetCurrentProcessId() && !gui::IsMenuVisible() && !g_StaFlags.STA_PAUSE &&
             EncounterPolicy::CanThrow(player->m_Rno0,player->isAlive()!=FALSE,player->isInAir()!=FALSE,story,player->isBladeModeActive()!=FALSE);
+        static bool wasEligible=false;
+        if(eligible!=wasEligible)
+        {
+            wasEligible=eligible;
+            GunRuntimeLog::Write("eligible=%d owned=%d focus=%d menu=%d pause=%d story=%d state=%X",
+                int(eligible),int(player && SamNativeRuntime::Get().Owns(player)),int(foreground==GetCurrentProcessId()),
+                int(gui::IsMenuVisible()),int(g_StaFlags.STA_PAUSE),int(story),player?player->m_Rno0:0);
+        }
         if(!eligible) {Deactivate();return;}
         Reserve();
         if(Stopped()) return;
         const bool held=(GetAsyncKeyState('C')&0x8000)!=0 || padOn!=0;
-        auto move=player->isInAir()?SmgPolicy::Aerial:
-            (player->m_CurrentInput.m_On&player->m_ButtonHeavyAttack)?SmgPolicy::Launcher:
-            (GetAsyncKeyState('A')&0x8000 || GetAsyncKeyState('D')&0x8000)?SmgPolicy::Sweep:SmgPolicy::Burst;
-        fire.Tick(held,true,move);
+        float flickX=g_dbPad.m_LeftStick.x,flickY=g_dbPad.m_LeftStick.y;
+        const float keyX=float((GetAsyncKeyState('D')&0x8000)!=0)-float((GetAsyncKeyState('A')&0x8000)!=0);
+        const float keyY=float((GetAsyncKeyState('W')&0x8000)!=0)-float((GetAsyncKeyState('S')&0x8000)!=0);
+        if(keyX || keyY) {flickX=keyX;flickY=keyY;}
+        const bool wide=sprayGesture.Tick(flickX,flickY,held);
+        const auto move=owner->isInAir()?SmgPolicy::Aerial:wide?SmgPolicy::Sweep:SmgPolicy::Burst;
+        fire.Tick(held,Neutral(),move);
         fire.RejectUnfunded();
-        displayCharge=fire.charge.frames;
+        const bool firingOrReady = held || fire.queued != 0 || fire.delay != 0 || readyWindow.remaining != 0;
+        gunSummoned = Neutral() && (firingOrReady && !fire.charge.requireRelease);
+        displayCharge=0;
         displayRounds=fire.rounds;displayReload=fire.reload;
         readyWindow.Tick(true,Neutral());
-        if(gunPose && !Neutral()) EndPose();
-        if(poseTicks && !OwnsPose())
-        {aiming.Reset();poseNode=-1;poseTicks=0;gunPose=readyPose=poseFrozen=false;}
-        else if(poseTicks)
+        if(!gunSummoned)
         {
-            // Hold the end of the native ready loop instead of leaking into
-            // Raiden's sword idle between shots. Recoil itself runs at 1x.
-            if(readyPose && readyWindow.remaining && poseTicks<=2)
-            {if(!poseFrozen) player->setNodePlaybackSpeed(poseNode,0);poseFrozen=true;}
-            else if(--poseTicks==0) {poseTicks=1;EndPose();}
+            visualPose.Reset();
+            gunPose=readyPose=raisingPose=reloadPose=false;poseTicks=0;stanceRaised=false;
         }
         displayReady=ResourcesReady() && Equip();
+        if(displayReady && displayStatus!=6 && displayStatus!=7) Status(resources[3].registered?8:9);
         if(!displayReady) return;
-        if(!fire.Ready())
+        static DWORD lastSnapshot=0;
+        const DWORD now=GetTickCount();
+        if(now-lastSnapshot>=2000)
         {
-            if(readyWindow.remaining && Neutral() && !poseTicks) Animate(false,true);
-            AimAt(SmgPolicy::Magdump(fire.move)?dumpTarget.getEntity():Acquire(false));
-            if(readyPose && !readyWindow.remaining && !fire.queued) EndPose();
-            return;
+            lastSnapshot=now;
+            auto* model=gun.getEntity();auto* behavior=model->m_pBehavior;
+            auto* root=behavior->getPartsPtr(SmgPolicy::Muzzle);
+            GunRuntimeLog::Write("gun snapshot entity=%p model=%p flags=%08X binding=%p constraint=%p root=%p rounds=%u queued=%u delay=%u",
+                model,behavior->m_pModel,behavior->m_ObjectFlags,
+                static_cast<cEm0010Weapon*>(behavior)->field_8CC.getEntity(),owner->getConstraintsEntity(Constraint),
+                root,fire.rounds,fire.queued,fire.delay);
         }
-        if(fire.ordinal==0 && animatedCombo!=fire.combo)
-        {
-            animatedCombo=fire.combo;dumpTarget=EntityHandle{};
-            if(SmgPolicy::Magdump(fire.move)) dumpTarget=Acquire(false);
-            if(!fire.comboPose)
-            {
-                // Enemy shooting state: 2200 raise -> 2400 recoil -> 0400.
-                // Starting directly with the nine-frame recoil leaves the
-                // previous sword pose in the blend and points the gun upward.
-                Animate(false,false,true);fire.delay=SmgPolicy::RaiseTicks;return;
-            }
-            Animate();if(fire.delay) return;
-        }
-        Entity* target=SmgPolicy::Magdump(fire.move)?dumpTarget.getEntity():Acquire(fire.move==SmgPolicy::Sweep);
-        if(SmgPolicy::Magdump(fire.move) && (!SamTargets::Enemy(target) || static_cast<BehaviorAppBase*>(target->m_pBehavior)->m_Hp<=0))
-        {target=Acquire(false);dumpTarget=target;}
-        const auto round=SmgPolicy::RoundMove(fire.move,fire.ordinal);
-        if(SmgPolicy::Magdump(fire.move))
-        {
-            // The raise clip can expire on the same tick as its delay. Track
-            // preparation per dump, not by the current pose's lifetime, so a
-            // completed raise cannot restart forever before bullet one.
-            if(preparedDumpCombo!=fire.combo && Neutral())
-            {preparedDumpCombo=fire.combo;Animate(false,false,true);fire.delay=SmgPolicy::RaiseTicks;return;}
-            Animate(true);
-        }
-        else if(!fire.comboPose) Animate(true);
-        AimAt(target);
-        pendingTarget=target;pendingMove=round;pendingShot=true;
+        GunRuntimeLog::stage="gun pose and firing";
+        if(!gunSummoned) return;
+        // Fire enters the ready grip immediately from any permitted action.
+        // Enemy raise/reload clips must not delay input or replace the grip.
+        visualCode=SmgPolicy::ReadyMotion;visualFrame=0;
+        gunPose=readyPose=true;raisingPose=reloadPose=false;poseTicks=1;
+        AimAt();
+        if(!fire.Ready()) return;
+        pendingTarget=aimTarget;
+        pendingMove=owner->isInAir()?SmgPolicy::Aerial:SmgPolicy::RoundMove(fire.move,fire.ordinal);
+        pendingSpray=SmgPolicy::Spray(fire.move,wide);pendingShot=true;
     }
     void PostTick(Pl0000* player)
     {
         if(owner!=player || !player || !player->m_pEntity || Stopped()) return;
+        if(IsEquipped() && gunSummoned && Neutral())
+        {
+            AimAt();
+            visualPose.Prepare(player,GetVisualMotion(SmgPolicy::ReadyMotion),aimPoint,0.12f);
+            const bool stationary=IsStationary();
+            const float moveSpeed=std::hypot(player->m_TransSpeed.x,player->m_TransSpeed.z);
+            const bool sprint=(player->m_CurrentInput.m_On & player->m_ButtonNinjarun)!=0 || moveSpeed>.10f;
+            // Keep the native pelvis and legs even at zero speed: an idle
+            // override can freeze the root on the first frame of movement.
+            // A stable two-handed ready sample avoids replaying donor scan,
+            // reload and raise motion on every burst or at loop boundaries.
+            visualPose.Apply(player,GetVisualMotion(SmgPolicy::ReadyMotion),0,true);
+            if(!stationary && !player->isInAir()) locomotionFrame+=SmgPolicy::StrideRate(moveSpeed,sprint);
+        }
+        const bool previouslySolved=ikSolved;ikSolved=false;
+        if(IsEquipped() && gunSummoned && Neutral() && !reloadPose && !raisingPose)
+        {
+            if(Entity* model=gun.getEntity();model && model->m_pBehavior)
+            {
+                GunRuntimeLog::stage="player gun upper-body aim";
+                AimAt(); // Camera/lock position after the native frame update.
+                const auto lockInfo = GetLockOnTargetInfo(player);
+                const bool solved=visualPose.Aim(player,model->m_pBehavior,aimPoint,
+                    D3DX_PI*.36f,lockInfo.hasLock?0.35f:0.075f);
+                ikSolved=solved;
+                if(solved!=previouslySolved)
+                {GunRuntimeLog::Write("upper-body aim solved=%d target=%p aim=(%.3f,%.3f,%.3f)",int(solved),aimTarget.getEntity(),aimPoint.x,aimPoint.y,aimPoint.z);}
+                static DWORD lastGripLog=0;
+                const DWORD gripNow=GetTickCount();
+                if(solved && gripNow-lastGripLog>=2000)
+                {
+                    lastGripLog=gripNow;
+                    auto* root=model->m_pBehavior->getPartsPtr(0);
+                    auto* wrist=player->getPartsPtr(9);
+                    if(root && wrist)
+                    {
+                        const auto& p=root->getPos();const auto& w=wrist->getPos();
+                        const auto& f=root->m_LocalMatrix.r[2];
+                        GunRuntimeLog::Write("post-aim grip wrist=(%.3f,%.3f,%.3f) gun=(%.3f,%.3f,%.3f) barrel=(%.3f,%.3f,%.3f) aim=(%.3f,%.3f,%.3f)",
+                            w.x,w.y,w.z,p.x,p.y,p.z,f.x,f.y,f.z,aimPoint.x,aimPoint.y,aimPoint.z);
+                    }
+                }
+            }
+        }
+        DisplayGunPose();
+        displayAim=IsEquipped() && gunSummoned && Neutral() && !g_StaFlags.STA_PAUSE;
+        displayLock=aimTarget.getEntity()!=nullptr;displaySolved=ikSolved;
         const bool react=player->isAlive() && !g_StaFlags.STA_PAUSE && !EncounterPolicy::Scripted(g_StaFlags.STA_EVENT,g_StaFlags.STA_QTE,g_StaFlags.STA_CODEC,g_StaFlags.STA_SOFT_EVENT);
         // Native TickGame updates the hand constraint and weapon muzzle bones.
         // Emit afterward so the bullet/flash use the gun's rendered position,
@@ -353,10 +772,7 @@ public:
             if(react && g_pPlayerManager && g_pPlayerManager->getSubWeaponEquipped()==NativeSmgMenuPolicy::Slot &&
                 EncounterPolicy::CanThrow(player->m_Rno0,true,player->isInAir()!=FALSE,false,player->isBladeModeActive()!=FALSE))
             {
-                Entity* target=pendingTarget.getEntity();
-                if(SmgPolicy::Magdump(fire.move) && (!SamTargets::Enemy(target) || static_cast<BehaviorAppBase*>(target->m_pBehavior)->m_Hp<=0))
-                {target=Acquire(false);dumpTarget=target;}
-                if(Spawn(target,pendingMove)) {fire.Fired();readyWindow.Fired();displayRounds=fire.rounds;displayReload=fire.reload;}
+                Spawn(aimTarget.getEntity(),pendingMove,pendingSpray || groupSpray);
             }
             else fire.Cancel();
         }
@@ -371,27 +787,25 @@ public:
             {
                 const auto& hit=hits.m_vector[h];const auto& data=hit.m_HitData;
                 if(!SmgPolicy::OwnedHit(data.field_0,data.field_4,data.field_18.getEntity()==player->m_pEntity)) continue;
-                bool identified=false;
-                // Weak handle values still identify bullets released on collision.
-                // Resolving vanished handles to nullptr would match unrelated hits.
-                for(const auto& shot:shots)
-                    if(!std::memcmp(&hit.field_120,&shot.handle,sizeof(EntityHandle)) ||
-                        !std::memcmp(&hit.field_124,&shot.handle,sizeof(EntityHandle))) {identified=true;break;}
+                bool identified=bulletPool.getEntity() &&
+                    (!std::memcmp(&hit.field_120,&bulletPool,sizeof(EntityHandle)) ||
+                     !std::memcmp(&hit.field_124,&bulletPool,sizeof(EntityHandle)));
                 bool lostHp=false;
                 for(const auto& snapshot:before) if(snapshot.target.getEntity()==target) {lostHp=actor->m_Hp<snapshot.hp;break;}
                 if(!react || !identified || !lostHp || actor->m_Hp<=0) continue;
                 auto found=std::find_if(impacts.begin(),impacts.end(),[target](const auto& v){return v.target.getEntity()==target;});
                 if(found==impacts.end()) {Impact v;v.target=target;impacts.push_back(v);found=impacts.end()-1;}
                 if(found->cooldown) continue;
-                if(data.field_0==SmgPolicy::LaunchAttack)
+                if(data.field_0==SmgPolicy::LaunchAttack && data.field_4==6)
                 {actor->m_TransSpeed.y=(std::max)(actor->m_TransSpeed.y,0.28f);found->cooldown=30;}
                 else if(!actor->isOnGround())
-                {actor->m_TransSpeed.y=(std::max)(actor->m_TransSpeed.y,0.06f);found->cooldown=4;}
+                {
+                    actor->m_TransSpeed.y=SmgPolicy::JuggleSpeed(actor->m_TransSpeed.y);found->cooldown=4;
+                    // Reward actual airborne hits without suspending misses.
+                    if(player->isInAir()) player->m_TransSpeed.y=SmgPolicy::AirComboSpeed(player->m_TransSpeed.y);
+                }
             }
         }
         impacts.erase(std::remove_if(impacts.begin(),impacts.end(),[](const auto& v){return !v.target.getEntity() || !v.cooldown;}),impacts.end());
-        shots.erase(std::remove_if(shots.begin(),shots.end(),[](auto& s){
-            Entity* entity=s.handle.getEntity();if(!entity) return true;
-            if(++s.age<SmgPolicy::Lifetime) return false;entity->release();return true;}),shots.end());
     }
 };

@@ -8,6 +8,7 @@
 #include <atomic>
 #include "injector/injector.hpp"
 #include "KunaiPolicy.h"
+#include "WeaponSwitchPolicy.h"
 
 
 
@@ -145,11 +146,13 @@ static void RenderSamDebug()
         ImGui::Separator();
 
         ImGui::Text("X / controller B: next ultimate / queue after current ground attack");
-        static const char* weaponNames[]={"Raiden sword","Murasama / Sam moveset","Pole-arm","Sai","Pincer blades","Unarmed","Bladewolf heatblades"};
+        const char* weaponNames[WeaponSwitchPolicy::Count]{};
+        for(int i=0;i<WeaponSwitchPolicy::Count;++i) weaponNames[i]=WeaponSwitchPolicy::Weapons[i].name;
         int selectedWeapon=gui::PendingWeapon()<0?gui::SelectedWeapon():gui::PendingWeapon();
-        if(ImGui::Combo("Weapon",&selectedWeapon,weaponNames,7)) gui::SelectWeapon(selectedWeapon);
-        ImGui::TextWrapped("Mouse wheel Up / Down or Q / E: previous / next melee weapon. D-pad opens the native inventory, including heatblades. Sam attacks can swap in their final 6 recovery frames. G / Select toggles Sam.");
+        if(ImGui::Combo("Weapon",&selectedWeapon,weaponNames,static_cast<int>(sizeof(weaponNames)/sizeof(*weaponNames)))) gui::SelectWeapon(selectedWeapon);
+        ImGui::TextWrapped("D-pad Down: next weapon, cycling through the full list including wp2050 dual swords. Mouse wheel Up / Down or Q / E: previous / next weapon. Sam attacks can swap in their final 6 recovery frames. G / Select toggles Sam.");
         if(gui::PendingWeapon()>=0) ImGui::Text("Weapon switch queued...");
+        ImGui::TextWrapped("%s",gui::DualBladeStatus());
         static const char* kunaiNames[]={"Native inventory subweapon","Stun kunai","Explosive kunai","Heat-blade kunai","Bladewolf heatblades","Kriss Vector SMG"};
         int selectedKunai=gui::SelectedKunai();
         if(ImGui::Combo("Secondary weapon##Subweapon",&selectedKunai,kunaiNames,IM_ARRAYSIZE(kunaiNames))) gui::SelectKunai(selectedKunai);
@@ -162,10 +165,12 @@ static void RenderSamDebug()
         {
             gui::SmgView smg;gui::GetSmgView(smg);
             ImGui::Text("SMG: %u / 30 | reload %.1fs | charge %.1fs",smg.rounds,smg.reload/60.0f,smg.charge/60.0f);
+            const char* gunStatus[]={"inactive","unsupported game executable","loading gun assets","gun animations missing","hand attachment occupied","gun creation failed","muzzle unavailable","bullet creation failed","gun attached and ready","gun effect bank unavailable"};
+            ImGui::Text("Gun: %s",smg.status<10?gunStatus[smg.status]:"unavailable");
             ImGui::Text("Native secondary menu: %s",smg.menuLinked?"linked":"unavailable on this executable / hook conflict");
-            ImGui::TextWrapped("Close this menu, then press C to fire the selected gun. The gun streams and attaches when gameplay resumes.");
+            ImGui::TextWrapped("Close this menu, then press C to fire the selected gun. Mouse / right stick aims at the center reticle; lock-on follows the selected enemy. Amber means the rifle is still raising or at its pitch limit.");
         }
-        ImGui::TextWrapped("SMG: normal and directional bursts use enemy shooting poses. Heavy + C uses Raiden combo clips. Hold C for 0.5s or longer, then release to dump all 30 rounds into the targeted enemy. A partial magazine reloads first; another reload follows the dump. Normal bullets fire from the gun muzzle. A / D + C: sweep. Air + C: aerial juggle.");
+        ImGui::TextWrapped("Gun: hold C to fire immediately and continuously; release to stop and hide the rifle. Flick + C sprays over a wide area. You can enter shooting during attacks, running, jumps and slides. Empty magazines reload automatically, then resume if C is still held. Hits keep airborne enemies juggled and briefly slow Raiden's fall.");
         ImGui::TextWrapped("Hold C / subweapon to precision aim. Tap: selected payload. Release after 0.3s: stun; 0.75s: explosive. Full charge at 1.5s automatically fires up to ten knives in a 90-degree fan, then cooldown. Release C before charging again. Mouse / right stick aims. Air, Blade Mode and combo throws consume one native knife per projectile.");
         ImGui::TextWrapped("RPG / Stinger: select in the native secondary menu. Tap C to fire on ground or in air; hold then release at 0.5s / 1.5s for 2x / 3x native damage. Uses one native rocket per successful shot. Cutscenes/QTEs, weapon changes and focus loss cancel charge. F7 / F8 chooses the knife / SMG mode.");
         ImGui::TextWrapped("Runtime repair: Sam damage table, 20% faster attacks/Ninja Run, nearby-enemy targeting, timed grab impacts and bounded Round Trip hits.");
@@ -353,6 +358,19 @@ void gui::OnEndScene()
     ImGui_ImplWin32_NewFrame();
     ImGui::NewFrame();
     RenderSamDebug();
+    gui::SmgView gunAim{};gui::GetSmgView(gunAim);
+    if(gunAim.aiming && !gunAim.locked && !gui::IsMenuVisible())
+    {
+        const auto size=ImGui::GetIO().DisplaySize;
+        const ImVec2 center(size.x*.5f,size.y*.5f);
+        auto* draw=ImGui::GetForegroundDrawList();
+        const ImU32 color=gunAim.solved?IM_COL32(230,240,255,230):IM_COL32(255,190,80,230);
+        draw->AddCircle(center,4,color,16,1.5f);
+        draw->AddLine(ImVec2(center.x-12,center.y),ImVec2(center.x-7,center.y),color,1.5f);
+        draw->AddLine(ImVec2(center.x+7,center.y),ImVec2(center.x+12,center.y),color,1.5f);
+        draw->AddLine(ImVec2(center.x,center.y-12),ImVec2(center.x,center.y-7),color,1.5f);
+        draw->AddLine(ImVec2(center.x,center.y+7),ImVec2(center.x,center.y+12),color,1.5f);
+    }
     gui::KunaiAimView aim{};
     gui::GetKunaiAimView(aim);
     if((aim.active || aim.recovery) && !gui::IsMenuVisible())

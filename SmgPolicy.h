@@ -3,20 +3,87 @@
 #include <cmath>
 #include <cstring>
 #include "GunChargePolicy.h"
+#include "SamDirectionalPolicy.h"
 
 namespace SmgPolicy
 {
-    // 20046 is a modeled enemy projectile. The native BulletBase descriptor
-    // defaults to wpb000, a mesh-free bullet prefab (1CF32).
-    constexpr unsigned Gun=0x30020, Bullet=0x3B000, MotionBank=0x10010;
-    constexpr unsigned Muzzle=0x300, MuzzleEffect=0;
-    constexpr unsigned EnemyMotionBank=0x20040;
-    constexpr unsigned Attack=0xDF, LaunchAttack=0xDE;
+    struct SprayGesture
+    {
+        SamDirectionalPolicy::Input direction;
+        bool active=false;
+        void Reset() {direction.Reset();active=false;}
+        bool Tick(float x,float y,bool held)
+        {
+            direction.Poll(x,y,false,false);
+            if(!held) active=false;
+            else if(direction.flickTicks && direction.flick!=SamDirectionalPolicy::None)
+            {
+                active=true;direction.flickTicks=0;direction.flick=SamDirectionalPolicy::None;
+            }
+            return held && active;
+        }
+    };
+    // Basic rifle cyborg Em0010: wp0040 geometry, wp004f effect/sound bank.
+    // Its rifle descriptor retains the constructor's generic wpb000 prefab.
+    constexpr unsigned Gun=0x30040, GunBank=0x3004F, Bullet=0x3B000, MotionBank=0x10010;
+    constexpr unsigned BulletPool=0x4B000;
+    constexpr unsigned Muzzle=0, MuzzleEffect=0;
+    constexpr const char* GunContext="Em0010_Assault";
+    constexpr float BulletSpeed=100.0f, TrajectoryScale=0.8f;
+    constexpr float MuzzleUp=0.01f, MuzzleForward=0.39f;
+    constexpr unsigned EnemyMotionBank=MotionBank; // All gun clips are retargeted into Pl0010.
+    constexpr unsigned Attack=0x146, LaunchAttack=0x146;
     constexpr unsigned Interval=4, Magazine=30, Reload=90, Lifetime=120, MaxShots=40;
     constexpr unsigned DumpInterval=2;
-    constexpr unsigned ReadyHold=180, RaiseTicks=16;
-    constexpr const char* ReadyMotion="0400";
-    constexpr const char* RaiseMotion="2200";
+    constexpr unsigned ReadyHold=180, RaiseTicks=21;
+    constexpr const char* IdleMotion="2e00"; // Em0010 2400: relaxed, lowered rifle stance
+    constexpr const char* ReadyMotion="2e03"; // Em0010 2402: level firing stance
+    constexpr const char* RaiseMotion="2e01";
+    constexpr const char* RecoilMotion="2e03"; // 2404 is upward aim, not recoil
+    constexpr const char* ReloadMotion="2e06";
+    constexpr const char* WalkStartMotion="2e10";
+    constexpr const char* WalkLoopMotion="2e11";
+    constexpr const char* WalkStopMotion="2e12";
+    constexpr const char* WalkStopAltMotion="2e13";
+    constexpr const char* WalkBackMotion="2e15";
+    constexpr const char* WalkLeftMotion="2e16";
+    constexpr const char* WalkRightMotion="2e17";
+    constexpr const char* RunStartMotion="2e20";
+    constexpr const char* RunLoopMotion="2e20";
+    constexpr const char* RunStopMotion="2e22";
+    constexpr const char* JogLoopMotion="2e21";
+    constexpr const char* RunAltMotion="2e23";
+
+    inline const char* Resolve(const char* name)
+    {
+        if(!name) return nullptr;
+        const char* code=name;
+        if(!std::strncmp(code,"pl0010_",7) || !std::strncmp(code,"pl0000_",7)) code+=7;
+        const size_t len=std::strlen(code);
+        if(len!=4 && !(len==8 && !std::strcmp(code+4,".mot"))) return nullptr;
+
+        // Idle / Combat idle: 0000, 0200, 0201, 0202, 0401 -> 2e00
+        if(!std::strncmp(code,"0000",4) || !std::strncmp(code,"0200",4) ||
+           !std::strncmp(code,"0201",4) || !std::strncmp(code,"0202",4) ||
+           !std::strncmp(code,"0401",4))
+            return IdleMotion;
+
+        // Enemy body clips with the exact requested player root/timing.
+        constexpr const char* player[]={"0010","0011","0012","0013","0020","0021","0022","0023",
+                                        "0210","0211","0212","0213","0220","0221","0222","0223"};
+        constexpr const char* motion[]={"2e40","2e41","2e42","2e43","2e44","2e45","2e46","2e47",
+                                        "2e48","2e49","2e4a","2e4b","2e4c","2e4d","2e4e","2e4f"};
+        for(unsigned i=0;i<16;++i) if(!std::strncmp(code,player[i],4)) return motion[i];
+
+        return nullptr;
+    }
+    inline bool Stationary(float inputMagnitudeSquared,float stickX,float stickY,bool keyboardMove,float speedX,float speedZ)
+    {
+        return !keyboardMove && inputMagnitudeSquared<0.0001f &&
+            stickX*stickX+stickY*stickY<0.01f && std::abs(speedX)+std::abs(speedZ)<0.003f;
+    }
+    constexpr unsigned FireInputMask(unsigned fire,unsigned sprint,unsigned jump,unsigned light,unsigned heavy,unsigned blade)
+    { return fire & ~(0xFu | sprint | jump | light | heavy | blade); }
     struct ReadyWindow
     {
         unsigned remaining=0;
@@ -25,6 +92,19 @@ namespace SmgPolicy
         void Cancel() {remaining=0;}
     };
     constexpr float Range=35.0f;
+    inline bool OnScreen(bool projected,float depth,float x,float y,float width,float height)
+    {
+        return projected && std::isfinite(depth+x+y+width+height) && depth>.05f &&
+            width>0 && height>0 && x>=0 && x<=width && y>=0 && y<=height;
+    }
+    inline unsigned SprayIndex(unsigned shot,unsigned count)
+    {
+        if(count<2) return 0;
+        const unsigned step=shot%(2*(count-1));
+        return step<count?step:2*(count-1)-step;
+    }
+    inline float StrideRate(float speed,bool running)
+    {return (std::clamp)(speed/(running?.18f:.065f),.35f,2.5f);}
     enum Move { Burst, Launcher, Aerial, Sweep, Charged,FullCharged };
     inline bool Magdump(Move move) {return move==Charged || move==FullCharged;}
     inline bool Rising(Move move) {return move==Launcher;}
@@ -43,8 +123,11 @@ namespace SmgPolicy
     inline unsigned MotionRelease(const char* code)
     {return !std::strcmp(code,"2570")?50:!std::strcmp(code,"2571")?49:
         !std::strcmp(code,"2577")?68:!std::strcmp(code,"2578")?59:41;}
-    inline Move RoundMove(Move move,unsigned ordinal)
-    {return Magdump(move)?(ordinal==0?Launcher:Burst):move==Burst && ordinal%3==2 ? Launcher : move;}
+    inline Move RoundMove(Move move,unsigned) {return move==Aerial?Aerial:move==Sweep?Sweep:Burst;}
+    inline bool Spray(Move move,bool wideInput) {return wideInput || move==Sweep || Magdump(move);}
+    constexpr float SprayWidth=0.30f, SprayHeight=0.10f;
+    inline float JuggleSpeed(float speed) {return (std::max)(speed,0.10f);}
+    inline float AirComboSpeed(float speed) {return (std::max)(speed,-0.025f);}
     struct FireControl
     {
         unsigned delay=0, rounds=Magazine, reload=0, queued=0, ordinal=0;
@@ -55,46 +138,41 @@ namespace SmgPolicy
         void Cancel() { queued=0;charge.Cancel();chainWindow=chainStep=0; }
         void Tick(bool held,bool active,Move requested)
         {
-            if(!active) { Cancel(); return; }
+            if(!active) {Cancel();return;}
             if(delay) --delay;
-            if(chainWindow && --chainWindow==0) chainStep=0;
             if(reload && --reload==0) rounds=Magazine;
-            if(!charge.down && held && !queued && !reload) move=requested;
-            if(charge.Tick(held,true,!queued && !reload) && !queued && !reload)
-            {
-                const unsigned tier=GunChargePolicy::Tier(charge.releasedFrames);
-                if(tier) move=tier==2?FullCharged:Charged;
-                // Repeated normal taps stay on enemy shooting poses. Special
-                // Raiden clips require an explicit heavy/sweep/charge action.
-                comboPose=move==Launcher || Magdump(move);
-                if(move==Launcher) {if(chainWindow) ++chainStep;else chainStep=1;chainWindow=90;}
-                queued=Magdump(move)?Magazine:move==Burst || move==Aerial || move==Sweep?3:1;
-                // A charged request always dumps a full magazine. If partially
-                // spent, reload first while retaining this one release request.
-                if(Magdump(move) && rounds<Magazine) reload=Reload;
-                ordinal=0;++combo;
-            }
+            // Automatic fire starts on press, not release. Cancellation still
+            // requires release before rearming after menus/story interruptions.
+            charge.Tick(held,true,true);
+            const bool firing=held && !charge.requireRelease;
+            queued=firing?1u:0u;
+            if(firing) move=requested;
+            comboPose=false;
         }
-        unsigned AnimationBank() const {return comboPose?MotionBank:EnemyMotionBank;}
+        unsigned AnimationBank() const {return MotionBank;}
         const char* AnimationCode() const
-        {return comboPose?Motion(move==Launcher?Burst:move,chainStep?chainStep-1:0):"2400";}
+        {return RecoilMotion;}
+        bool SummonRequested(bool held) const {return held && !charge.requireRelease;}
         bool Ready() const { return queued && rounds>=Cost(move) && !delay && !reload; }
         void Fired()
         {
             if(!Ready()) return;
-            --queued;rounds-=Cost(move);++ordinal;delay=Magdump(move)?DumpInterval:Interval;
-            if(!rounds || (queued && rounds<Cost(move))) {reload=Reload;queued=0;}
+            --queued;rounds-=Cost(move);++ordinal;delay=Interval;
+            if(!rounds || (queued && rounds<Cost(move))) reload=Reload;
         }
-        void RejectUnfunded() {if(queued && !reload && rounds<Cost(move)) {reload=Reload;queued=0;}}
+        void RejectUnfunded() {if(queued && !reload && rounds<Cost(move)) reload=Reload;}
     };
     inline void Configure(unsigned char* data,Move move)
     {
         auto word=[data](unsigned offset,unsigned value){std::memcpy(data+offset,&value,4);};
         unsigned flags=0;std::memcpy(&flags,data,4);
         word(0,flags|4);word(4,Bullet);
-        // Keep the enemy gun's collision type and attack data, with the generic
-        // native bullet prefab instead of its modeled enemy ammunition.
-        word(0x110,0x58);word(0x114,0x34);
+        // Em0010 rifle descriptor (73839A..7384DB): native attack 146,
+        // 7383AC temporarily subtracts 8 from ESP before the write at 7383E5:
+        // [ESP+168] is descriptor+110, not descriptor+114. FFFF disables it.
+        word(0x110,0x19);word(0x114,0);
+        const float drag=0.998f;
+        std::memcpy(data+0x16C,&drag,4);
         word(0x10,Rising(move)?LaunchAttack:Attack);word(0x14,Damage(move));
         word(0x18,0);word(0x1C,15);
     }

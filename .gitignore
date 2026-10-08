@@ -31,3 +31,12 @@ imgui.ini
 *.cmd
 /tools
 /tools
+!/tools/
+!/tools/build_gun_animations.py
+!/tools/build.cmd
+!/tools/build_dual_blade_animations.py
+!/tools/retarget_sundowner_blender.py
+!/tests/sai_pull_tests.cpp
+/tools
+/RetargetHandoff
+/tools

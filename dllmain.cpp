@@ -7,6 +7,7 @@
 
 #include "SamMovesetManager.h"
 #include "WeaponSwitcher.h"
+#include "SaiPullController.h"
 #include "KunaiSubweapon.h"
 #include "NativeSmgMenu.h"
 #include "WeaponSlowMotionFix.h"
@@ -58,6 +59,7 @@ void gui::ToggleMovesetFromGUI()
 }
 
 int gui::SelectedWeapon() { return WeaponSwitcher::Get().Selected(); }
+const char* gui::DualBladeStatus() { return DualBladeWeapon::Get().Status(); }
 int gui::PendingWeapon() { return WeaponSwitcher::Get().Pending(); }
 void gui::SelectWeapon(int index) { WeaponSwitcher::Get().Select(index); }
 int gui::SelectedKunai() { return KunaiSubweapon::Get().Pending()<0 ? KunaiSubweapon::Get().Selected() : KunaiSubweapon::Get().Pending(); }
@@ -150,6 +152,7 @@ static PlayerShutdown oPlayerShutdown = nullptr;
 static void __fastcall ShutdownExtendedPlayer(Pl0000* player, void*)
 {
     WeaponSwitcher::Get().Forget(player);
+    SaiPullController::Get().Forget(player);
     KunaiSubweapon::Get().Forget(player);
     SamNativeRuntime::Get().BeforeShutdown(player);
     SamMovesetManager::Instance().ForgetPlayer(player);
@@ -183,8 +186,10 @@ static Animation_RequestSequence_t oAnimation_RequestSequence = nullptr;
 
 struct PlayerAnimationRequest : SamCombatRouting::RequestClip
 {
+    enum class Owner : unsigned char { None, SamMoveset, DualBlades, Gun };
     Behavior* actor = nullptr;
     int mapId = -1;
+    Owner owner = Owner::None;
     bool motionSupplied = false;
 };
 static thread_local PlayerAnimationRequest* s_animationRequest = nullptr;
@@ -196,6 +201,33 @@ static bool IsMovesetPlayer(Behavior* behavior)
         !SamMovesetManager::Instance().IsSubweaponActive() &&
         !SamMovesetManager::StoryEvent() && SamNativeRuntime::Get().Active(g_Scene.m_pPlayer) &&
         behavior == reinterpret_cast<Behavior*>(g_Scene.m_pPlayer);
+}
+
+static bool IsDualBladePlayer(Behavior* actor)
+{
+    return actor && actor==g_Scene.m_pPlayer &&
+        WeaponSwitcher::Get().Selected()==WeaponSwitchPolicy::DualBlades &&
+        (!g_pPlayerManager || g_pPlayerManager->getCustomWeaponEquipped()==0) &&
+        !SamMovesetManager::StoryEvent() && DualBladeWeapon::Get().Active(actor);
+}
+
+static bool IsGunPlayer(Behavior* actor)
+{
+    return actor && actor==g_Scene.m_pPlayer &&
+        !SamMovesetManager::StoryEvent() &&
+        KunaiSubweapon::Get().IsSmgActive();
+}
+
+static bool IsAnimationRequestActive(const PlayerAnimationRequest* request)
+{
+    if (!request || !request->actor) return false;
+    switch (request->owner)
+    {
+    case PlayerAnimationRequest::Owner::SamMoveset: return IsMovesetPlayer(request->actor);
+    case PlayerAnimationRequest::Owner::DualBlades: return IsDualBladePlayer(request->actor);
+    case PlayerAnimationRequest::Owner::Gun: return IsGunPlayer(request->actor);
+    default: return false;
+    }
 }
 
 using CreatePlayerEffect = void(__thiscall*)(Behavior*, int, cEspControler*);
@@ -214,7 +246,7 @@ static void __fastcall Custom_Animation_RequestSequence(Animation* animation, vo
     auto* request = s_animationRequest;
     auto* player = g_Scene.m_pPlayer;
     if (request && request->motionSupplied && request->clip.sequence &&
-        IsMovesetPlayer(request->actor) && player && player->m_pEntity &&
+        IsAnimationRequestActive(request) && player && player->m_pEntity &&
         player->m_pEntity->m_pAnimation == animation)
     {
         using AttachSequence = int(__thiscall*)(void*, void*, const char*, int);
@@ -230,17 +262,18 @@ static void* __fastcall Custom_Animation_FindMotion(Animation* animation, void*,
 {
     auto* request = s_animationRequest;
     Pl0000* player = g_Scene.m_pPlayer;
-    if (request && IsMovesetPlayer(request->actor) && player && player->m_pEntity &&
-        animation == player->m_pEntity->m_pAnimation && request->clip.sequence &&
-        (request->clip.motion || SamDlcRouting::SharedMotion(request->samCode)))
+    if (IsAnimationRequestActive(request) && player && player->m_pEntity &&
+        animation == player->m_pEntity->m_pAnimation &&
+        (request->clip.motion || (request->clip.sequence && SamDlcRouting::SharedMotion(request->samCode))))
     {
         void* motion=request->clip.motion;
         if(!motion && oAnimation_FindMotion) motion=oAnimation_FindMotion(animation,name);
         if(!motion) return nullptr;
-        SamMovesetManager::Instance().RecordAnimationMapRequest(request->mapId,
-            request->code, request->samCode,
-            request->clip.source == SamArchiveLookup::Source::Playable ? "pl1400" : "em0020",
-            true, request->clip.motion?"Native Sam motion and sequence":"DLC sequence with native shared execution motion");
+        if(IsMovesetPlayer(request->actor))
+            SamMovesetManager::Instance().RecordAnimationMapRequest(request->mapId,
+                request->code, request->samCode,
+                request->clip.source == SamArchiveLookup::Source::Playable ? "pl1400" : "em0020",
+                true, request->clip.motion?"Native Sam motion and sequence":"DLC sequence with native shared execution motion");
         request->motionSupplied = true;
         return motion;
     }
@@ -252,7 +285,7 @@ static void* __fastcall Custom_Behavior_GetSequenceFile(Behavior* actor, void*, 
     auto* request = s_animationRequest;
     // Use the exact pair selected by the motion lookup for this request.
     // Do not resolve again or mix the two Sam archives.
-    if (request && request->motionSupplied && actor == request->actor && IsMovesetPlayer(actor))
+    if (request && request->motionSupplied && actor == request->actor && IsAnimationRequestActive(request))
         if (void* sequence = request->clip.sequence)
         {
             SamMovesetManager::Instance().RecordSequenceReplacement(request->code);
@@ -296,8 +329,25 @@ static int __fastcall Custom_Behavior_RequestAnimationByName(Behavior* pThis, vo
 {
     const bool active = IsMovesetPlayer(pThis);
     PlayerAnimationRequest request{};
-    request.actor = active ? pThis : nullptr;
+    const bool dual = IsDualBladePlayer(pThis);
+    const bool gun = IsGunPlayer(pThis);
+    request.actor = (active || dual || gun) ? pThis : nullptr;
     request.mapId = s_animationMapId;
+    if (dual) {
+        request.owner = PlayerAnimationRequest::Owner::DualBlades;
+        const bool hasOtherCustomWeapon = (g_pPlayerManager && g_pPlayerManager->getCustomWeaponEquipped() != 0) ||
+            WeaponSwitchPolicy::IsCustomWeaponIndex(WeaponSwitcher::Get().Selected());
+        if (const char* code=DualBladePolicy::Resolve(anim, !hasOtherCustomWeapon)) {
+            request.clip=DualBladeWeapon::Get().GetClip(code);
+            std::memcpy(request.code,code,4); std::memcpy(request.samCode,code,4);
+        }
+    }
+    if (gun) {
+        // Gun donor clips are visual upper-body samples only. Replacing a
+        // native graph motion here leaves its native sequence paired with a
+        // different/rootless clip and stops locomotion even with C released.
+        KunaiSubweapon::GetSmg().ObserveAnimation(anim, node, startFrame, playbackSpeed);
+    }
     const bool nativeSam = active && SamNativeRuntime::Get().Active(g_Scene.m_pPlayer);
     if (active && anim && (std::strstr(anim, "3500") || std::strstr(anim, "3501")))
     {
@@ -342,12 +392,13 @@ static int __fastcall Custom_Behavior_RequestAnimationByName(Behavior* pThis, vo
                 request.code, request.samCode, "pl1400/em0020", false, "Sam pair missing; native fallback");
         else if (request.clip.motion && request.clip.sequence)
         {
+            request.owner = PlayerAnimationRequest::Owner::SamMoveset;
             Pl0000* player = g_Scene.m_pPlayer;
             if (player) SheathController::Instance().AnimateSheathDirect(player, request.samCode);
         }
     }
     PlayerAnimationRequest* previousRequest = s_animationRequest;
-    s_animationRequest = active ? &request : nullptr;
+    s_animationRequest = (active || dual || gun) ? &request : nullptr;
     if (active)
         SamMovesetManager::Instance().TraceRequest(anim);
     int result = 0;
@@ -370,6 +421,7 @@ static int __fastcall Custom_Behavior_RequestAnimationByName(Behavior* pThis, vo
 // ============================================================================
 static void __fastcall Custom_Pl0000_HandleActions(Pl0000* pThis, void* edx)
 {
+    if(pThis==g_Scene.m_pPlayer) SaiPullController::Get().ApplyAttackInput(pThis);
     if (pThis == g_Scene.m_pPlayer)
         SamMovesetManager::Instance().RecordActionHandler("raiden");
 
@@ -400,12 +452,14 @@ static void __cdecl CustomTickGame()
         {
             SamMovesetManager::Instance().UpdateSceneSafety(player);
             WeaponSwitcher::Get().Tick(player);
+            DualBladeWeapon::Get().Tick(player);
+            SaiPullController::Get().Tick(player);
             KunaiSubweapon::Get().Tick(player);
             SamMovesetManager::Instance().OnTick(player);
             WeaponSwitcher::Get().ReserveUltimate(player);
         }
     }
-    __except (EXCEPTION_EXECUTE_HANDLER) {}
+    __except (GunRuntimeLog::Exception(GetExceptionInformation(),"pre-tick")) {}
 
     __try
     {
@@ -417,8 +471,10 @@ static void __cdecl CustomTickGame()
         auto* player = g_Scene.m_pPlayer;
         if (player && player->m_pEntity) SamMovesetManager::Instance().PostTick(player);
         if (player && player->m_pEntity) KunaiSubweapon::Get().PostTick(player);
+        if (player && player->m_pEntity) SaiPullController::Get().PostTick(player);
+        if (player && player->m_pEntity) DualBladeWeapon::Get().PostTick(player);
     }
-    __except (EXCEPTION_EXECUTE_HANDLER) {}
+    __except (GunRuntimeLog::Exception(GetExceptionInformation(),"post-tick")) {}
 
 }
 
@@ -429,6 +485,7 @@ static void InitHooks()
 {
     SamConfig::LoadConfig();
     WeaponSlowMotionFix::Install();
+    DualBladeRuntime::Install();
     static SafeHook::Hook knifeDefinition((void*)(shared::base+0x54DFD0),
         (void*)NativeKnifeInventory::LookupDefinition,true,(void**)&NativeKnifeInventory::originalDefinition);
     static SafeHook::Hook knifeAlias((void*)(shared::base+0x77F840),

@@ -25,6 +25,12 @@ namespace GunChargePolicy
         }
     };
     constexpr bool LauncherSlot(int slot) {return slot==5 || slot==6;}
+    constexpr bool GrenadeSlot(int slot) {return slot>=1 && slot<=4;}
+    constexpr bool AerialGrenade(int slot,bool airborne) {return GrenadeSlot(slot) && airborne;}
+    constexpr unsigned GrenadeObject(int slot)
+    {return slot==2?0x31031:slot==3?0x31041:slot==4?0x31051:0x31011;}
+    constexpr unsigned GrenadeAlias(int slot)
+    {return slot==2?0x20CEB102:slot==3?0x126FFCBB:slot==4?0x70DCE4D0:0x4B20F7AE;}
     constexpr unsigned LauncherObject(int slot) {return slot==6?0x310E1:0x31002;}
     constexpr unsigned LauncherAlias(int slot) {return slot==6?0x7089ED6C:0x3800CB76;}
     constexpr unsigned Cooldown(unsigned tier) {return tier==2?60:45;}

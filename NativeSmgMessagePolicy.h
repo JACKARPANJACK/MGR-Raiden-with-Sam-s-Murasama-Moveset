@@ -13,10 +13,10 @@ namespace NativeSmgMessagePolicy
     constexpr const char* Type="Sub machine gun";
     constexpr std::array<const char*,3> Description{{
         "KRISS Vector submachine gun.",
-        "Light rounds stagger and juggle foes.",
-        "Hold the subweapon button and release",
+        "Hold C to fire immediately.",
+        "Move, jump or slide while shooting.",
     }};
-    constexpr const char* LastLine="for a focused 30-round magazine dump.";
+    constexpr const char* LastLine="Flick then C for spray. Release C to stop.";
     constexpr int FirstIndex=0x70000000;
     struct Line {unsigned offset,padding,length,lengthWithEnd,height,horiz;};
     struct Text {unsigned offset,count,vpos,hpos,font;};

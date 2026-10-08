@@ -7,6 +7,14 @@
 namespace KunaiPolicy
 {
     enum Variant { Native, Stun, Explosive, Heat, Heatblades, VectorSmg, Count };
+    inline bool InventorySelected(int variant,int slot)
+    {return slot==10 && variant>Native && variant<VectorSmg;}
+    inline int InventoryVariant(int variant,int slot,bool smgReady)
+    {
+        if(slot==11 && smgReady) return VectorSmg;
+        if(slot==10) return InventorySelected(variant,slot)?variant:Heatblades;
+        return Native;
+    }
     constexpr unsigned Object = 0x30372;
     constexpr unsigned GrenadeObject = 0x31011;
     constexpr unsigned Attack = 0x151;

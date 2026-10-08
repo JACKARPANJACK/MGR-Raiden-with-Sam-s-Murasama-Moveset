@@ -14,6 +14,8 @@ namespace SaiPullPolicy {
         return distance > StopDistance ? (distance - StopDistance < Speed ? distance - StopDistance : Speed) : 0;
     }
     inline bool Safe(unsigned state, bool alive, bool air, bool blade, bool scripted) {
-        return alive && !air && !blade && !scripted && state <= 0x1Au && state != 7 && state != 0xEu;
+        return alive && !air && !blade && !scripted &&
+            ((state <= 0x1Au && state != 7 && state != 0xEu) ||
+             (state>=0x100000 && state<0x100040));
     }
 }

@@ -4,17 +4,36 @@
 
 namespace WeaponSwitchPolicy
 {
-    struct Weapon { const char* name; unsigned object; int equipped; bool unarmed; bool sam; bool projectile=false; };
-    constexpr int Sword=0, Murasama=1, Unarmed=5, Heatblades=6;
+    struct Weapon { const char* name; unsigned object; int equipped; bool unarmed; bool sam; };
+    constexpr int Sword=0, Polearm=1, Sai=2, Pincers=3, DualBlades=4, Murasama=5, Unarmed=6;
     inline constexpr Weapon Weapons[] = {
-        {"Raiden sword",0,0,false,false}, {"Murasama / Sam moveset",0,0,false,true},
-        {"Pole-arm",0x32000,2,false,false}, {"Sai",0x32030,3,false,false},
-        {"Pincer blades",0x32020,4,false,false}, {"Unarmed",0x32040,5,true,false},
-        {"Bladewolf heatblades",0x30372,0,false,false,true}
+        {"Raiden sword",0,0,false,false},
+        {"L'Etranger (Pole-arm)",0x32000,2,false,false},
+        {"Sai",0x32030,3,false,false},
+        {"Pincer blades",0x32020,4,false,false},
+        // Special Weapon 6 is plugin-owned; use native sword combat rather
+        // than indexing the game's six-entry custom weapon tables with 6.
+        {"Dual swords (wp2050) / Special Weapon 6",0x30050,6,false,false},
+        {"Murasama / Sam moveset",0,0,false,true},
+        {"Unarmed",0x32040,5,true,false}
     };
     constexpr int Count=sizeof(Weapons)/sizeof(Weapons[0]);
+    constexpr int NativeEquipped(int type) { return type==6?0:type; }
     // Native prologue/unarmed state 1; state 2 is the sword-lost path.
     constexpr int SwordState(int selected) { return selected==Unarmed?1:0; }
+    constexpr bool IsCustomWeaponIndex(int index) {
+        return index==Polearm || index==Sai || index==Pincers || index==Unarmed;
+    }
+    constexpr int IndexFromCustomEquipped(int customEquipped)
+    {
+        switch(customEquipped) {
+            case 2: return Polearm;
+            case 3: return Sai;
+            case 4: return Pincers;
+            case 5: return Unarmed;
+            default: return Sword;
+        }
+    }
     inline int WheelSteps(int delta,int& remainder)
     {
         delta=delta>1200?1200:delta< -1200?-1200:delta;
@@ -32,32 +51,31 @@ namespace WeaponSwitchPolicy
     { return focused && alive && !scripted && !paused; }
     constexpr unsigned PadPress(unsigned on,unsigned trig,unsigned previous)
     { return (on|trig)&~previous&0xFu; }
+    constexpr unsigned DPadDown=0x4;
+    struct PadBindings { unsigned forward; unsigned back; };
+    inline const PadBindings& Bindings()
+    {
+        static const PadBindings bindings{
+            DPadDown | (SamConfig::GetInt("WeaponSwitch","CycleNextDPadRight",0)?0x2u:0u),
+            (SamConfig::GetInt("WeaponSwitch","CyclePrevDPadLeft",0)?0x8u:0u) |
+            (SamConfig::GetInt("WeaponSwitch","CyclePrevDPadUp",0)?0x1u:0u)
+        };
+        return bindings;
+    }
 
     inline unsigned PadConsumeMask()
     {
-        unsigned mask = 0;
-        if (SamConfig::GetInt("WeaponSwitch", "CycleNextDPadDown", 0)) mask |= 0x4; // Down
-        if (SamConfig::GetInt("WeaponSwitch", "CycleNextDPadRight", 0)) mask |= 0x2; // Right
-        if (SamConfig::GetInt("WeaponSwitch", "CyclePrevDPadLeft", 0)) mask |= 0x8; // Left
-        if (SamConfig::GetInt("WeaponSwitch", "CyclePrevDPadUp", 0)) mask |= 0x1; // Up
-        return mask;
+        return Bindings().forward | Bindings().back;
     }
 
-    inline int InputSelection(int current,bool previous,bool next,unsigned padTrig)
+    constexpr int InputSelectionWithBindings(int current,bool previous,bool next,unsigned padTrig,PadBindings bindings)
     {
-        static int downNext = -1, rightNext = -1, leftPrev = -1, upPrev = -1;
-        if (downNext == -1)
-        {
-            downNext = SamConfig::GetInt("WeaponSwitch", "CycleNextDPadDown", 1);
-            rightNext = SamConfig::GetInt("WeaponSwitch", "CycleNextDPadRight", 0);
-            leftPrev = SamConfig::GetInt("WeaponSwitch", "CyclePrevDPadLeft", 0);
-            upPrev = SamConfig::GetInt("WeaponSwitch", "CyclePrevDPadUp", 0);
-        }
-        
-        bool back = previous || (upPrev && (padTrig & 0x1)) || (leftPrev && (padTrig & 0x8));
-        bool forward = next || (downNext && (padTrig & 0x4)) || (rightNext && (padTrig & 0x2));
+        bool back = previous || (padTrig & bindings.back);
+        bool forward = next || (padTrig & bindings.forward);
         return back==forward ? -1 : Cycle(current,forward?1:-1);
     }
+    inline int InputSelection(int current,bool previous,bool next,unsigned padTrig)
+    { return InputSelectionWithBindings(current,previous,next,padTrig,Bindings()); }
     constexpr bool CanSwitch(uint32_t state,bool alive,bool airborne,bool scripted,bool blade,bool flight,bool recovery=false)
     {
         if (!alive || airborne || scripted || blade || flight) return false;
