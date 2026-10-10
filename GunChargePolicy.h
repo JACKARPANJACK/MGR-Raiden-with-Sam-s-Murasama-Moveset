@@ -27,6 +27,10 @@ namespace GunChargePolicy
     constexpr bool LauncherSlot(int slot) {return slot==5 || slot==6;}
     constexpr bool GrenadeSlot(int slot) {return slot>=1 && slot<=4;}
     constexpr bool AerialGrenade(int slot,bool airborne) {return GrenadeSlot(slot) && airborne;}
+    constexpr bool AerialSlot(int slot,bool airborne)
+    {return airborne && (LauncherSlot(slot) || GrenadeSlot(slot));}
+    constexpr const char* AirMotion(int slot) {return LauncherSlot(slot)?"2570":"2566";}
+    constexpr unsigned AirReleaseTicks(int slot) {return LauncherSlot(slot)?17:12;}
     constexpr unsigned GrenadeObject(int slot)
     {return slot==2?0x31031:slot==3?0x31041:slot==4?0x31051:0x31011;}
     constexpr unsigned GrenadeAlias(int slot)

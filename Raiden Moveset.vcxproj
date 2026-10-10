@@ -66,6 +66,9 @@
     <ClInclude Include="framework.h" />
     <ClInclude Include="pch.h" />
     <ClInclude Include="gui.h" />
+    <ClInclude Include="DualBladeWeapon.h" />
+    <ClInclude Include="DualBladePolicy.h" />
+    <ClInclude Include="WeaponAttachment.h" />
     <ClInclude Include="KunaiPolicy.h" />
     <ClInclude Include="SmgPolicy.h" />
     <ClInclude Include="SmgSubweapon.h" />

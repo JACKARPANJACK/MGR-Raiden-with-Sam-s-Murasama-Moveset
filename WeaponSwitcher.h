@@ -85,6 +85,7 @@ public:
     }
     void Tick(Pl0000* player)
     {
+        if (!SamPlayerIdentity::Eligible(player)) player = nullptr;
         if (owner!=player) { DualBladeWeapon::Get().Release(owner); Cancel(); ReleaseWarm();pending=-1; selected=0; owner=player; }
         if(!player || !g_pPlayerManager) return;
         DWORD foreground=0;

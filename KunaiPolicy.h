@@ -69,10 +69,11 @@ namespace KunaiPolicy
             remaining=recovering ? BurstCooldown : RapidInterval;
         }
     };
-    // A full-body release pose may replace neutral movement only. Attacks,
-    // air movement and Blade Mode retain their animation while knives release.
+    // Release poses can play during jump/fall; attacks and Blade Mode retain
+    // their own animation. Held precision aim remains a ground pose.
     inline bool CanAnimateThrow(unsigned state,bool airborne,bool bladeMode)
-    {return !airborne && !bladeMode && (state<=4 || (state>=0x100000 && state<=0x100002));}
+    {return !bladeMode && (state<=4 || (state>=0x100000 && state<=0x100002) ||
+        (airborne && (state==9 || state==0xB || state==0x100005)));}
     struct ReleasePlan { int variant; unsigned count; bool homing; };
     inline ReleasePlan Plan(unsigned frames,int selected,unsigned ammo,unsigned capacity)
     {

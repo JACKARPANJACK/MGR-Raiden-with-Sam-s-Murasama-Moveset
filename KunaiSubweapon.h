@@ -60,6 +60,7 @@ class KunaiSubweapon
     KunaiPolicy::ThrowPose pose;
     bool aimLatched=false, poseFrozen=false;
     bool poseIsAim=false;
+    bool poseInAir=false;
     unsigned throwKeyOn=0, throwKeyTrig=0, throwKeyRep=0;
     KunaiPolicy::Charge charge;
     struct ReleaseRequest
@@ -156,11 +157,13 @@ class KunaiSubweapon
     }
     void AnimateThrow(Pl0000* player,bool heldAim=false)
     {
+        const bool airborne=player->isInAir()!=FALSE;
+        if(heldAim && airborne) return;
         if(!KunaiPolicy::CanStartPose(pose.remaining!=0,poseIsAim,heldAim)) return;
         if(!KunaiPolicy::CanAnimateThrow(player->m_Rno0,player->isInAir()!=FALSE,
             player->isBladeModeActive()!=FALSE)) return;
         if(player->m_CurrentInput.m_On & (player->m_ButtonLightAttack|player->m_ButtonHeavyAttack|
-            player->m_ButtonJump|player->m_ButtonNinjarun|player->m_ButtonBlademode)) return;
+            (airborne ? 0u : player->m_ButtonJump)|player->m_ButtonNinjarun|player->m_ButtonBlademode)) return;
         const auto clip=SamResourceManager::Instance().GetRaidenClip(heldAim ? "2561" : "2566");
         const unsigned length=SamStagePolicy::Length(clip.motion);
         if(!length) return;
@@ -180,18 +183,30 @@ class KunaiSubweapon
         if(throwNode==-1) return;
         pose={};pose.Begin(KunaiPolicy::PoseTicks(length,heldAim),throwNode,returnMap);
         poseIsAim=heldAim;
+        poseInAir=airborne;
         poseFrozen=false;
+    }
+    void ReturnThrowPose(Pl0000* player)
+    {
+        if(player->isInAir()) player->requestAnimationByName("0232",0,0.05f,1.0f,0,0.0f,1.0f);
+        else player->requestAnimationByMap(pose.returnMap);
     }
     void TickThrowPose(Pl0000* player,bool holdAim,bool pendingThrow)
     {
         if(!pose.remaining) return;
         const unsigned interrupt=player->m_ButtonLightAttack|player->m_ButtonHeavyAttack|
-            player->m_ButtonJump|player->m_ButtonNinjarun|player->m_ButtonBlademode;
+            (player->isInAir() ? 0u : player->m_ButtonJump)|player->m_ButtonNinjarun|player->m_ButtonBlademode;
         const bool neutral=KunaiPolicy::CanAnimateThrow(player->m_Rno0,player->isInAir()!=FALSE,
             player->isBladeModeActive()!=FALSE) && !(player->m_CurrentInput.m_On&interrupt);
         const bool owns=player->m_pAnimationSlot && player->m_pAnimationSlot->m_pArray &&
             player->m_pAnimationSlot->m_pArray[0].m_SlotId==pose.node &&
             !std::strcmp(player->m_pAnimationSlot->m_pArray[0].m_pAnimName,"Direct");
+        if(!Blocked() && poseInAir!=(player->isInAir()!=FALSE))
+        {
+            if(owns && poseFrozen) player->setNodePlaybackSpeed(pose.node,KunaiPolicy::AimPlayback);
+            if(owns && neutral) ReturnThrowPose(player);
+            pose={};poseFrozen=poseIsAim=poseInAir=false;return;
+        }
         // Returning through the previous native map preserves its normal blend;
         // replaced movement/attack nodes own their own completion.
         const bool retainAim=poseIsAim && (holdAim || pendingThrow);
@@ -207,10 +222,10 @@ class KunaiSubweapon
         }
         if(poseIsAim && !holdAim && !pendingThrow && !Blocked())
         {
-            if(owns && neutral) player->requestAnimationByMap(pose.returnMap);
+            if(owns && neutral) ReturnThrowPose(player);
             pose={};poseFrozen=poseIsAim=false;return;
         }
-        if(pose.Tick(!Blocked(),owns,neutral)) player->requestAnimationByMap(pose.returnMap);
+        if(pose.Tick(!Blocked(),owns,neutral)) ReturnThrowPose(player);
         if(!pose.remaining) poseFrozen=false;
     }
     static std::array<Entity*,3> AcquireTargets(const Hw::cVec4& origin,KunaiPolicy::Vector direction,float cone)
@@ -435,7 +450,7 @@ public:
         smg.Forget(player);
         launchers.Forget(player);
         // The synthetic slot is scene-owned; never leave it to an unhooked player.
-        if(NativeKnifeInventory::raidenScene && g_pPlayerManager &&
+        if(NativeKnifeInventory::raidenScene && SamPlayerIdentity::Eligible(g_Scene.m_pPlayer) && g_pPlayerManager &&
             g_pPlayerManager->getSubWeaponEquipped()==NativeSmgMenuPolicy::Slot)
             g_pPlayerManager->setSubWeaponEquipped(0);
         electric.Reset(); burns.clear(); beforeHits.clear();
@@ -448,6 +463,7 @@ public:
     void SceneReleased() {smg.SceneReleased();launchers.SceneReleased();}
     void Tick(Pl0000* player)
     {
+        if (!SamPlayerIdentity::Eligible(player)) player = nullptr;
         if(owner!=player) {if(owner) Forget(owner); owner=player;}
         if(!player || !player->m_pEntity || !g_pPlayerManager) return;
         if(!SamNativeRuntime::Get().Owns(player)) { Forget(player);return; }

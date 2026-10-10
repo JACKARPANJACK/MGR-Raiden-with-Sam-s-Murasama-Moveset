@@ -3,7 +3,13 @@
 
 namespace gui
 {
-    struct SmgView {unsigned rounds=0,reload=0,charge=0,status=0;bool ready=false,menuLinked=false,aiming=false,locked=false,solved=false;};
+    struct SmgView {
+        unsigned rounds=0,reload=0,charge=0,status=0;
+        bool ready=false,menuLinked=false,aiming=false,locked=false,solved=false;
+        float screenX=0,screenY=0;
+        float spread=0;
+        bool hasScreenPos=false;
+    };
     void GetSmgView(SmgView& out);
     int EquippedSecondary();
     int PendingSecondary();

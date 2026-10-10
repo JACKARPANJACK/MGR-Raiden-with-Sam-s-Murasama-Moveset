@@ -546,7 +546,7 @@ public:
 private:
     void Activate(Pl0000* player)
     {
-        if (!player || m_bActive || StoryEvent() || Trigger::StpFlags.STP_OBJ ||
+        if (!SamPlayerIdentity::Eligible(player) || m_bActive || StoryEvent() || Trigger::StpFlags.STP_OBJ ||
             !SamResourceManager::Instance().IsLoaded())
             return;
 
@@ -582,6 +582,7 @@ private:
 
     void Deactivate(Pl0000* player)
     {
+        if (!SamPlayerIdentity::Eligible(player)) player = nullptr;
         if (!m_bActive && !m_bEnabled)
             return;
 
@@ -1013,7 +1014,7 @@ public:
 
     void Toggle(Pl0000* player)
     {
-        if (!player) return;
+        if (!SamPlayerIdentity::Eligible(player)) return;
 
         if (m_bActive || m_bEnabled)
         {
@@ -1031,7 +1032,7 @@ public:
 
     void SetEnabled(Pl0000* player,bool enabled)
     {
-        if(!player) return;
+        if(!SamPlayerIdentity::Eligible(player)) return;
         if(enabled)
         {
             if(!m_bEnabled && !m_bActive) Toggle(player);
@@ -1043,9 +1044,10 @@ public:
     {
         if (!player || reinterpret_cast<uintptr_t>(player) < 0x10000) return;
         if (!player->m_pEntity || reinterpret_cast<uintptr_t>(player->m_pEntity) < 0x10000) return;
+        if (!SamPlayerIdentity::Eligible(player)) return;
 
         if (m_activePlayer && m_activePlayer != player)
-            Deactivate(player);
+            Deactivate(m_activePlayer);
 
         // Service DLC resource streaming every tick
         SamResourceManager::Instance().Update();

@@ -4,6 +4,8 @@
 #include "SamNativeRuntime.h"
 #include "EncounterPolicy.h"
 #include "gui.h"
+#include "SamResourceManager.h"
+#include "SamStagePolicy.h"
 #include <cItemPossessionBase.h>
 #include <cObjReadManager.h>
 #include <array>
@@ -20,6 +22,36 @@ class NativeLauncherSubweapon
     GunChargePolicy::Hold charge;
     unsigned pendingTier=0,cooldown=0,pendingAge=0;
     bool pending=false,reserved=false;
+    int airNode=-1;
+    unsigned airTicks=0,airRemaining=0;
+    bool OwnsAirPose() const
+    {
+        return owner && airNode>=0 && owner->m_pAnimationSlot && owner->m_pAnimationSlot->m_pArray &&
+            owner->m_pAnimationSlot->m_pArray[0].m_SlotId==airNode &&
+            !std::strcmp(owner->m_pAnimationSlot->m_pArray[0].m_pAnimName,"Direct");
+    }
+    void EndAirPose()
+    {
+        if(OwnsAirPose() && owner->isAlive() && !owner->isBladeModeActive() &&
+            !EncounterPolicy::Scripted(g_StaFlags.STA_EVENT,g_StaFlags.STA_QTE,g_StaFlags.STA_CODEC,g_StaFlags.STA_SOFT_EVENT) &&
+            EncounterPolicy::CanThrow(owner->m_Rno0,true,owner->isInAir()!=FALSE,false,false))
+        {
+            if(owner->isInAir()) owner->requestAnimationByName("0232",0,0.05f,1,0,0,1);
+            else if(owner->m_Rno0<=4) owner->requestAnimationByMap(4);
+        }
+        airNode=-1;airTicks=airRemaining=0;
+    }
+    bool BeginAirPose()
+    {
+        const auto clip=SamResourceManager::Instance().GetRaidenClip(GunChargePolicy::AirMotion(equipped));
+        const unsigned length=SamStagePolicy::Length(clip.motion);
+        if(!length || !owner->isInAir()) return false;
+        // Motion only: native ground aim flags, root travel and ammo events must
+        // never run here. The existing aerial graph retains gravity/landing.
+        airNode=owner->setDirectAnimation(clip.motion,nullptr,0,0.05f,1,0x8000000,0,3);
+        if(airNode<0) return false;
+        airTicks=0;airRemaining=(length+2)/3;return true;
+    }
     int equipped=0;
     unsigned mask=0,padOn=0,padTrig=0,padRep=0,keyOn=0,keyTrig=0,keyRep=0;
     static constexpr unsigned Key=1u<<('C'%32);
@@ -191,7 +223,7 @@ public:
         g_Keyboard.m_pOn[2]=(g_Keyboard.m_pOn[2]&~Key)|keyOn;g_Keyboard.m_pTrig[2]=(g_Keyboard.m_pTrig[2]&~Key)|keyTrig;
         g_Keyboard.m_pRep[2]=(g_Keyboard.m_pRep[2]&~Key)|keyRep;reserved=false;
     }
-    void Cancel() {RestoreInputs();charge.Cancel();pending=false;pendingAge=0;ReleaseWeapon();}
+    void Cancel() {RestoreInputs();charge.Cancel();pending=false;pendingAge=0;EndAirPose();ReleaseWeapon();}
     void Forget(Pl0000* player)
     {if(player==owner) {Cancel();owner=nullptr;equipped=0;cooldown=0;}}
     void SceneReleased()
@@ -210,15 +242,20 @@ public:
         if(slot!=equipped) {Cancel();equipped=slot;cooldown=0;}
         DWORD foreground=0;GetWindowThreadProcessId(GetForegroundWindow(),&foreground);
         const bool story=EncounterPolicy::Scripted(g_StaFlags.STA_EVENT,g_StaFlags.STA_QTE,g_StaFlags.STA_CODEC,g_StaFlags.STA_SOFT_EVENT);
-        if(!player || !player->m_pEntity || (!GunChargePolicy::LauncherSlot(slot) &&
-            !GunChargePolicy::AerialGrenade(slot,player->isInAir()!=FALSE)) || !SamNativeRuntime::Get().Owns(player) ||
+        if(!player || !player->m_pEntity || !GunChargePolicy::AerialSlot(slot,player->isInAir()!=FALSE) || !SamNativeRuntime::Get().Owns(player) ||
             foreground!=GetCurrentProcessId() || gui::IsMenuVisible() || g_StaFlags.STA_PAUSE || player->isBladeModeActive() ||
             !EncounterPolicy::CanThrow(player->m_Rno0,player->isAlive()!=FALSE,player->isInAir()!=FALSE,story,false))
         {Cancel();return;}
         Reserve();if(Trigger::StpFlags.STP_OBJ) return;
+        if(airNode>=0)
+        {
+            if(!OwnsAirPose()) {Cancel();return;}
+            ++airTicks;
+            if(airRemaining && !--airRemaining) EndAirPose();
+        }
         if(cooldown) --cooldown;
         const bool held=(GetAsyncKeyState('C')&0x8000)!=0 || padOn!=0;
-        if(charge.Tick(held,true,!cooldown && !pending))
+        if(charge.Tick(held,true,!cooldown && !pending && airNode<0))
         {pending=true;pendingTier=GunChargePolicy::Tier(charge.releasedFrames);pendingAge=0;}
         const bool ready=Ready();
         if(!GunChargePolicy::GrenadeSlot(equipped) && ready) Weapon();
@@ -230,9 +267,14 @@ public:
         if(!g_pPlayerManager || g_pPlayerManager->getSubWeaponEquipped()!=equipped ||
             gui::IsMenuVisible() || g_StaFlags.STA_PAUSE || player->isBladeModeActive() ||
             !EncounterPolicy::CanThrow(player->m_Rno0,player->isAlive()!=FALSE,player->isInAir()!=FALSE,story,false) ||
-            !player->isAlive() || (GunChargePolicy::GrenadeSlot(equipped) && !player->isInAir())) {Cancel();return;}
-        if(Ready() && (GunChargePolicy::GrenadeSlot(equipped)?FireGrenade():Fire()))
+            !player->isAlive() || !player->isInAir()) {Cancel();return;}
+        if(!Ready()) {if(++pendingAge>=60) Cancel();return;}
+        if(airNode<0) {if(!BeginAirPose() && ++pendingAge>=60) Cancel();return;}
+        if(!OwnsAirPose()) {Cancel();return;}
+        if(airTicks<GunChargePolicy::AirReleaseTicks(equipped)) return;
+        if(GunChargePolicy::GrenadeSlot(equipped)?FireGrenade():Fire())
         {pending=false;cooldown=GunChargePolicy::GrenadeSlot(equipped)?30:GunChargePolicy::Cooldown(pendingTier);}
-        else if(++pendingAge>=60) {pending=false;pendingAge=0;}
+        // A failed release must not spawn late from a recovery/falling pose.
+        else {pending=false;pendingAge=0;cooldown=30;}
     }
 };

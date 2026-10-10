@@ -54,20 +54,20 @@ void gui::GetDebugView(gui::DebugView& out)
 
 void gui::ToggleMovesetFromGUI()
 {
-    if (g_Scene.m_pPlayer && reinterpret_cast<uintptr_t>(g_Scene.m_pPlayer) >= 0x10000)
+    if (SamPlayerIdentity::Eligible(g_Scene.m_pPlayer))
         SamMovesetManager::Instance().Toggle(g_Scene.m_pPlayer);
 }
 
 int gui::SelectedWeapon() { return WeaponSwitcher::Get().Selected(); }
 const char* gui::DualBladeStatus() { return DualBladeWeapon::Get().Status(); }
 int gui::PendingWeapon() { return WeaponSwitcher::Get().Pending(); }
-void gui::SelectWeapon(int index) { WeaponSwitcher::Get().Select(index); }
+void gui::SelectWeapon(int index) { if (SamPlayerIdentity::Eligible(g_Scene.m_pPlayer)) WeaponSwitcher::Get().Select(index); }
 int gui::SelectedKunai() { return KunaiSubweapon::Get().Pending()<0 ? KunaiSubweapon::Get().Selected() : KunaiSubweapon::Get().Pending(); }
 int gui::EquippedSecondary() { return KunaiSubweapon::Get().Selected(); }
 int gui::PendingSecondary() { return KunaiSubweapon::Get().Pending(); }
 void gui::GetKunaiAimView(gui::KunaiAimView& out) { KunaiSubweapon::Get().AimView(out); }
 void gui::GetSmgView(gui::SmgView& out) { KunaiSubweapon::Get().SmgView(out); }
-void gui::SelectKunai(int index) { KunaiSubweapon::Get().Select(index); }
+void gui::SelectKunai(int index) { if (SamPlayerIdentity::Eligible(g_Scene.m_pPlayer)) KunaiSubweapon::Get().Select(index); }
 static Behavior* __cdecl ReleaseKunai(Entity* owner, void* descriptor)
 { return KunaiSubweapon::Get().Release(owner,descriptor); }
 
@@ -78,29 +78,32 @@ void gui::RequestResourcesFromGUI()
 
 void gui::CycleNextUltimate()
 {
+    if (!SamPlayerIdentity::Eligible(g_Scene.m_pPlayer)) return;
     SamMovesetManager::Instance().CycleUltimate();
 }
 
 void gui::SelectUltimate(unsigned int index)
 {
+    if (!SamPlayerIdentity::Eligible(g_Scene.m_pPlayer)) return;
     SamMovesetManager::Instance().SetUltimateIndex(index);
 }
 
 void gui::TriggerUltimateNow()
 {
+    if (!SamPlayerIdentity::Eligible(g_Scene.m_pPlayer)) return;
     SamMovesetManager::Instance().TriggerUltimateNow();
 }
 
 void gui::RecallRoundTrip()
 {
-    if (g_Scene.m_pPlayer && reinterpret_cast<uintptr_t>(g_Scene.m_pPlayer) >= 0x10000)
+    if (SamPlayerIdentity::Eligible(g_Scene.m_pPlayer))
         SamMovesetManager::Instance().EndRoundTrip(g_Scene.m_pPlayer);
 }
 
 bool gui::PlayTestAnimation(const char* code, char* outDetails, size_t outDetailsCap)
 {
     Pl0000* player = g_Scene.m_pPlayer;
-    if (!player || reinterpret_cast<uintptr_t>(player) < 0x10000)
+    if (!SamPlayerIdentity::Eligible(player))
     {
         if (outDetails && outDetailsCap > 0)
             std::snprintf(outDetails, outDetailsCap, "Player not available");
@@ -151,6 +154,7 @@ using PlayerShutdown = void(__thiscall*)(Pl0000*);
 static PlayerShutdown oPlayerShutdown = nullptr;
 static void __fastcall ShutdownExtendedPlayer(Pl0000* player, void*)
 {
+    const bool wasCurrentPlayer = !g_Scene.m_pPlayer || g_Scene.m_pPlayer == player;
     WeaponSwitcher::Get().Forget(player);
     SaiPullController::Get().Forget(player);
     KunaiSubweapon::Get().Forget(player);
@@ -158,7 +162,9 @@ static void __fastcall ShutdownExtendedPlayer(Pl0000* player, void*)
     SamMovesetManager::Instance().ForgetPlayer(player);
     oPlayerShutdown(player);
     SamNativeRuntime::Get().Destroyed(player);
-    if (!g_Scene.m_pPlayer || g_Scene.m_pPlayer == player)
+    // Native shutdown clears scene pointers even when retiring a former player.
+    // Preserve resources belonging to the replacement after a character switch.
+    if (wasCurrentPlayer)
     {
         KunaiSubweapon::Get().SceneReleased();
         SamResourceManager::Instance().SceneReleased();
@@ -197,7 +203,7 @@ static thread_local int s_animationMapId = -1;
 
 static bool IsMovesetPlayer(Behavior* behavior)
 {
-    return behavior && SamMovesetManager::Instance().IsEnabled() &&
+    return SamPlayerIdentity::Eligible(behavior) && SamMovesetManager::Instance().IsEnabled() &&
         !SamMovesetManager::Instance().IsSubweaponActive() &&
         !SamMovesetManager::StoryEvent() && SamNativeRuntime::Get().Active(g_Scene.m_pPlayer) &&
         behavior == reinterpret_cast<Behavior*>(g_Scene.m_pPlayer);
@@ -205,7 +211,7 @@ static bool IsMovesetPlayer(Behavior* behavior)
 
 static bool IsDualBladePlayer(Behavior* actor)
 {
-    return actor && actor==g_Scene.m_pPlayer &&
+    return SamPlayerIdentity::Eligible(actor) && actor==g_Scene.m_pPlayer &&
         WeaponSwitcher::Get().Selected()==WeaponSwitchPolicy::DualBlades &&
         (!g_pPlayerManager || g_pPlayerManager->getCustomWeaponEquipped()==0) &&
         !SamMovesetManager::StoryEvent() && DualBladeWeapon::Get().Active(actor);
@@ -213,7 +219,7 @@ static bool IsDualBladePlayer(Behavior* actor)
 
 static bool IsGunPlayer(Behavior* actor)
 {
-    return actor && actor==g_Scene.m_pPlayer &&
+    return SamPlayerIdentity::Eligible(actor) && actor==g_Scene.m_pPlayer &&
         !SamMovesetManager::StoryEvent() &&
         KunaiSubweapon::Get().IsSmgActive();
 }
@@ -421,14 +427,15 @@ static int __fastcall Custom_Behavior_RequestAnimationByName(Behavior* pThis, vo
 // ============================================================================
 static void __fastcall Custom_Pl0000_HandleActions(Pl0000* pThis, void* edx)
 {
-    if(pThis==g_Scene.m_pPlayer) SaiPullController::Get().ApplyAttackInput(pThis);
-    if (pThis == g_Scene.m_pPlayer)
+    const bool raiden = pThis == g_Scene.m_pPlayer && SamPlayerIdentity::Eligible(pThis);
+    if(raiden) SaiPullController::Get().ApplyAttackInput(pThis);
+    if (raiden)
         SamMovesetManager::Instance().RecordActionHandler("raiden");
 
     if (oPl0000_HandleActions)
         oPl0000_HandleActions(pThis);
 
-    if (pThis == g_Scene.m_pPlayer && SamMovesetManager::Instance().IsBossEnderActive())
+    if (raiden && SamMovesetManager::Instance().IsBossEnderActive())
     {
         if (pThis->m_Rno0 != SamUltimatePolicy::Action && SamUltimatePolicy::Attack(pThis->m_Rno0))
         {
@@ -448,7 +455,8 @@ static void __cdecl CustomTickGame()
 
         Pl0000* player = g_Scene.m_pPlayer;
         if (player && reinterpret_cast<uintptr_t>(player) >= 0x10000 &&
-            player->m_pEntity && reinterpret_cast<uintptr_t>(player->m_pEntity) >= 0x10000)
+            player->m_pEntity && reinterpret_cast<uintptr_t>(player->m_pEntity) >= 0x10000 &&
+            SamPlayerIdentity::Eligible(player))
         {
             SamMovesetManager::Instance().UpdateSceneSafety(player);
             WeaponSwitcher::Get().Tick(player);
@@ -457,6 +465,15 @@ static void __cdecl CustomTickGame()
             KunaiSubweapon::Get().Tick(player);
             SamMovesetManager::Instance().OnTick(player);
             WeaponSwitcher::Get().ReserveUltimate(player);
+        }
+        else {
+            // Restore prior Raiden owners without passing the new character into restoration.
+            SamMovesetManager::Instance().ResetForNativeDlc();
+            WeaponSwitcher::Get().Tick(nullptr);
+            DualBladeWeapon::Get().Tick(nullptr);
+            SaiPullController::Get().Tick(nullptr);
+            KunaiSubweapon::Get().Tick(nullptr);
+            NativeKnifeInventory::raidenScene = false;
         }
     }
     __except (GunRuntimeLog::Exception(GetExceptionInformation(),"pre-tick")) {}
@@ -469,10 +486,12 @@ static void __cdecl CustomTickGame()
     __try
     {
         auto* player = g_Scene.m_pPlayer;
-        if (player && player->m_pEntity) SamMovesetManager::Instance().PostTick(player);
-        if (player && player->m_pEntity) KunaiSubweapon::Get().PostTick(player);
-        if (player && player->m_pEntity) SaiPullController::Get().PostTick(player);
-        if (player && player->m_pEntity) DualBladeWeapon::Get().PostTick(player);
+        if (SamPlayerIdentity::Eligible(player)) {
+            SamMovesetManager::Instance().PostTick(player);
+            KunaiSubweapon::Get().PostTick(player);
+            SaiPullController::Get().PostTick(player);
+            DualBladeWeapon::Get().PostTick(player);
+        }
     }
     __except (GunRuntimeLog::Exception(GetExceptionInformation(),"post-tick")) {}
 

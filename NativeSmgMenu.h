@@ -66,6 +66,7 @@ namespace NativeSmgMenu
     }
     inline void __fastcall DrawRows(void* menu,void*,int category)
     {
+        if (!SupportedScene()) { originalDraw(menu, category); return; }
         // Native localized name images are initialized at menu load time.
         // Retain all ten originals and reuse the RPG icon for the new firearm.
         std::memcpy(presentation.data(),reinterpret_cast<void*>(shared::base+0x14B5778),120);

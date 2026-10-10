@@ -172,7 +172,7 @@ static void RenderSamDebug()
         }
         ImGui::TextWrapped("Gun: hold C to fire immediately and continuously; release to stop and hide the rifle. Flick + C sprays over a wide area. You can enter shooting during attacks, running, jumps and slides. Empty magazines reload automatically, then resume if C is still held. Hits keep airborne enemies juggled and briefly slow Raiden's fall.");
         ImGui::TextWrapped("Hold C / subweapon to precision aim. Tap: selected payload. Release after 0.3s: stun; 0.75s: explosive. Full charge at 1.5s automatically fires up to ten knives in a 90-degree fan, then cooldown. Release C before charging again. Mouse / right stick aims. Air, Blade Mode and combo throws consume one native knife per projectile.");
-        ImGui::TextWrapped("RPG / Stinger: select in the native secondary menu. Tap C to fire on ground or in air; hold then release at 0.5s / 1.5s for 2x / 3x native damage. Uses one native rocket per successful shot. Cutscenes/QTEs, weapon changes and focus loss cancel charge. F7 / F8 chooses the knife / SMG mode.");
+        ImGui::TextWrapped("RPG / Stinger: select in the native secondary menu. Ground aiming stays native. In air, tap C to fire; hold then release at 0.5s / 1.5s for 2x / 3x native damage. Grenade/EMP/chaff/smoke slots can also be thrown in air. Uses one native rocket per successful shot. Cutscenes/QTEs, weapon changes and focus loss cancel charge. F7 / F8 chooses the knife / SMG mode.");
         ImGui::TextWrapped("Runtime repair: Sam damage table, 20% faster attacks/Ninja Run, nearby-enemy targeting, timed grab impacts and bounded Round Trip hits.");
         ImGui::TextWrapped("F: Sam sweeping finisher on nearby cyborgs below 25% HP. Native executions, Zandatsu and Blade Mode charge use Sam's DLC controller. Regular hits: 12% electric stun; heavy hits: 25%, with a cooldown.");
         ImGui::Text("Next: %s%s", state.nextUltimate, state.ultimateQueued ? " (QUEUED)" : "");
@@ -359,17 +359,32 @@ void gui::OnEndScene()
     ImGui::NewFrame();
     RenderSamDebug();
     gui::SmgView gunAim{};gui::GetSmgView(gunAim);
-    if(gunAim.aiming && !gunAim.locked && !gui::IsMenuVisible())
+    if(gunAim.aiming && !gui::IsMenuVisible())
     {
         const auto size=ImGui::GetIO().DisplaySize;
-        const ImVec2 center(size.x*.5f,size.y*.5f);
+        ImVec2 center(size.x*.5f,size.y*.5f);
+        if(gunAim.hasScreenPos && gunAim.screenX >= 0.0f && gunAim.screenX <= size.x &&
+           gunAim.screenY >= 0.0f && gunAim.screenY <= size.y)
+        {
+            center = ImVec2(gunAim.screenX, gunAim.screenY);
+        }
         auto* draw=ImGui::GetForegroundDrawList();
-        const ImU32 color=gunAim.solved?IM_COL32(230,240,255,230):IM_COL32(255,190,80,230);
-        draw->AddCircle(center,4,color,16,1.5f);
-        draw->AddLine(ImVec2(center.x-12,center.y),ImVec2(center.x-7,center.y),color,1.5f);
-        draw->AddLine(ImVec2(center.x+7,center.y),ImVec2(center.x+12,center.y),color,1.5f);
-        draw->AddLine(ImVec2(center.x,center.y-12),ImVec2(center.x,center.y-7),color,1.5f);
-        draw->AddLine(ImVec2(center.x,center.y+7),ImVec2(center.x,center.y+12),color,1.5f);
+        const ImU32 color=gunAim.locked ? IM_COL32(80,255,180,240) :
+                         (gunAim.solved ? IM_COL32(230,240,255,230) : IM_COL32(255,190,80,230));
+        const float dynamicGap = 6.0f + gunAim.spread * 150.0f;
+        const float lineLen = 8.0f;
+        const float dotRadius = gunAim.locked ? 3.0f : 2.0f;
+
+        draw->AddCircleFilled(center, dotRadius, color);
+        draw->AddLine(ImVec2(center.x - dynamicGap - lineLen, center.y), ImVec2(center.x - dynamicGap, center.y), color, 1.8f);
+        draw->AddLine(ImVec2(center.x + dynamicGap, center.y), ImVec2(center.x + dynamicGap + lineLen, center.y), color, 1.8f);
+        draw->AddLine(ImVec2(center.x, center.y - dynamicGap - lineLen), ImVec2(center.x, center.y - dynamicGap), color, 1.8f);
+        draw->AddLine(ImVec2(center.x, center.y + dynamicGap), ImVec2(center.x, center.y + dynamicGap + lineLen), color, 1.8f);
+
+        if(gunAim.locked)
+        {
+            draw->AddCircle(center, dynamicGap + 5.0f, IM_COL32(80,255,180,180), 24, 1.5f);
+        }
     }
     gui::KunaiAimView aim{};
     gui::GetKunaiAimView(aim);

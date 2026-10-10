@@ -4,6 +4,8 @@
 #include <array>
 #include <cstring>
 #include "NativeSmgMenuPolicy.h"
+#include "SamPlayerIdentity.h"
+#include <cScene.h>
 
 // Native DLC3_BladeKnife: itemlist.bxm ID 44, Type 14, capacity 10.
 // Raiden's menu already enumerates this alias and maps it to subweapon 10.
@@ -21,10 +23,11 @@ namespace NativeKnifeInventory
     inline bool smgMenuReady=false;
     inline std::array<unsigned char,0x48> smgDefinition{};
     inline bool smgDefinitionReady=false;
+    inline bool SupportedCharacter() { return SamPlayerIdentity::Eligible(g_Scene.m_pPlayer); }
 
     inline void* SmgDefinition(void* registry)
     {
-        if(!raidenScene || !smgMenuReady) return nullptr;
+        if(!raidenScene || !SupportedCharacter() || !smgMenuReady) return nullptr;
         if(!smgDefinitionReady)
         {
             const void* source=originalDefinition(registry,0x3800CB76); // RPG, native Type 0 gun possession.
@@ -45,7 +48,7 @@ namespace NativeKnifeInventory
     {
         void* native=originalDefinition(registry,alias);
         if(!native && alias==NativeSmgMenuPolicy::Alias) return SmgDefinition(registry);
-        if (native || alias!=Alias || !raidenScene) return native;
+        if (native || alias!=Alias || !raidenScene || !SupportedCharacter()) return native;
         if (!definitionReady)
         {
             const void* grenade=originalDefinition(registry,0x4B20F7AE);
@@ -67,10 +70,11 @@ namespace NativeKnifeInventory
     {
         void* native=originalDefinitionById(registry,id);
         if(!native && id==NativeSmgMenuPolicy::ItemId) return SmgDefinition(registry);
-        return native || id!=44 || !raidenScene ? native : LookupDefinition(registry,nullptr,Alias);
+        return native || id!=44 || !raidenScene || !SupportedCharacter() ? native : LookupDefinition(registry,nullptr,Alias);
     }
     inline unsigned __cdecl EquippedAlias()
     {
+        if (!SupportedCharacter()) return originalEquippedAlias();
         if(raidenScene && smgMenuReady && g_pPlayerManager &&
             g_pPlayerManager->getSubWeaponEquipped()==NativeSmgMenuPolicy::Slot)
             return NativeSmgMenuPolicy::Alias;
@@ -85,7 +89,7 @@ namespace NativeKnifeInventory
     }
     inline bool Ensure()
     {
-        if (!raidenScene || !originalDefinition) return false;
+        if (!raidenScene || !SupportedCharacter() || !originalDefinition) return false;
         if (Item()) return true;
         void* source=LookupDefinition(reinterpret_cast<void*>(shared::base+0x1486A60),nullptr,Alias);
         if (!source) return false;
@@ -105,7 +109,7 @@ namespace NativeKnifeInventory
     }
     inline bool EnsureSmg()
     {
-        if(!raidenScene || !smgMenuReady || !originalDefinition) return false;
+        if(!raidenScene || !SupportedCharacter() || !smgMenuReady || !originalDefinition) return false;
         if(auto* item=SmgItem()) {if(!item->hasPossession()) item->set(1);return true;}
         void* source=SmgDefinition(reinterpret_cast<void*>(shared::base+0x1486A60));
         if(!source) return false;

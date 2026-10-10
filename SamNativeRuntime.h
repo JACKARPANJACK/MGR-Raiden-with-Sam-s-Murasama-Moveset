@@ -12,6 +12,7 @@
 #include "SamTargets.h"
 #include "SamVisualEffects.h"
 #include <BehaviorAppBase.h>
+#include "SamPlayerIdentity.h"
 
 // A record belongs to an engine allocation, not to whichever player pointer
 // happens to be in g_Scene this frame. Records survive until native shutdown.
@@ -178,7 +179,9 @@ public:
             records[player] = std::make_unique<Record>();
     }
 
-    bool Owns(Pl0000* player) const { return records.find(player) != records.end(); }
+    bool Owns(Pl0000* player) const {
+        return records.find(player) != records.end() && SamPlayerIdentity::Eligible(player);
+    }
     BattleParameterImplement* NativeBattleParameters(Pl0000* player) const
     {
         if(!player) return nullptr;
@@ -196,12 +199,12 @@ public:
     bool Active(Pl0000* player) const
     {
         const auto it = records.find(player);
-        return it != records.end() && it->second->active;
+        return it != records.end() && SamPlayerIdentity::Eligible(player) && it->second->active;
     }
 
     bool Activate(Pl0000* player)
     {
-        if (!player) return false;
+        if (!SamPlayerIdentity::Eligible(player)) return false;
         auto it = records.find(player);
         if (it == records.end()) return false;
         if (!SamResourceManager::Instance().IsRuntimeReady()) return false;
