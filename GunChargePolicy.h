@@ -2,12 +2,13 @@
 namespace GunChargePolicy
 {
     constexpr unsigned First=30,Full=90;
+    constexpr bool AirInputHeld(bool key,bool pad,bool native) {return key || pad || native;}
     constexpr unsigned Tier(unsigned frames) {return frames>=Full?2:frames>=First?1:0;}
     struct Hold
     {
         unsigned frames=0,releasedFrames=0;
         bool down=false,requireRelease=false,accepting=false;
-        void Cancel() {frames=0;releasedFrames=0;down=accepting=false;requireRelease=true;}
+        void Cancel(bool held=true) {frames=0;releasedFrames=0;down=accepting=false;requireRelease=held;}
         bool Tick(bool held,bool enabled,bool canStart=true)
         {
             if(!enabled) {Cancel();return false;}
@@ -26,6 +27,12 @@ namespace GunChargePolicy
     };
     constexpr bool LauncherSlot(int slot) {return slot==5 || slot==6;}
     constexpr bool GrenadeSlot(int slot) {return slot>=1 && slot<=4;}
+    constexpr bool GroundAimSlot(int slot) {return GrenadeSlot(slot) || LauncherSlot(slot);}
+    constexpr bool GroundAimStart(int slot,bool airborne,unsigned state,bool held)
+    {return GroundAimSlot(slot) && !airborne && held &&
+        (state<=4 || (state>=0x100000 && state<=0x100002));}
+    constexpr bool GroundAimResume(unsigned state,bool held,unsigned elapsed)
+    {return !held && elapsed>=3 && state<=4;}
     constexpr bool AerialGrenade(int slot,bool airborne) {return GrenadeSlot(slot) && airborne;}
     constexpr bool AerialSlot(int slot,bool airborne)
     {return airborne && (LauncherSlot(slot) || GrenadeSlot(slot));}

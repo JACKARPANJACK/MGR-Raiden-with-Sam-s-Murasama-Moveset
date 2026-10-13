@@ -55,14 +55,14 @@ public:
 		m_animation[0] = 0; m_swordHidden = -1;
 	}
 
-	int CheckSheath_2097152Flag0(Pl0000* player)
+	int CheckSheath_2097152Flag0(Pl0000* player, bool chargePose = false)
 	{
 		if (!player) return 0;
 		Track(player);
 		if (player->isUnarmed() || (player->m_CustomWeaponBone == 0x701 && player->m_CustomWeaponHandle.getEntity()))
 			return 0;
 
-		bool hasFlag53 = player->ckSeqFlag(53);
+		bool hasFlag53 = chargePose || player->ckSeqFlag(53);
 
 		if (hasFlag53 && (!Flag53 || !player->getConstraintById(CONSTRAINT_4)))
 		{
@@ -89,7 +89,7 @@ public:
 		return *(char*)((char*)player + FIELD_544C);
 	}
 
-	void CheckSheath_2097152Flag1(Behavior* behavior)
+	void CheckSheath_2097152Flag1(Behavior* behavior, bool chargePose = false)
 	{
 		if (!behavior) return;
 		Pl0000* player = static_cast<Pl0000*>(behavior);
@@ -106,7 +106,7 @@ public:
 		if (!Trigger::StaFlags.STA_QTE || !g_GameStateManager.IsMainSamPlayer)
 			Flag53_ = false;
 
-		const bool holding = !player->isUnarmed() && player->ckSeqFlag(21);
+		const bool holding = !player->isUnarmed() && (chargePose || player->ckSeqFlag(21));
 		Constraints* hip = player->getConstraintById(3);
 		const int newField854 = holding ? ATTACH_POINT_1793 : hip ? hip->m_nBone : ATTACH_POINT_2032;
 		*(int*)((char*)behavior + FIELD_5444) = newField854;
@@ -122,7 +122,7 @@ public:
 		*(int*)((char*)behavior + FIELD_5448) = newField854;
 	}
 
-	void UpdateSheathAnimation(Pl0000* player, const char* requested = nullptr)
+	void UpdateSheathAnimation(Pl0000* player, const char* requested = nullptr, float playbackSpeed = 1.0f)
 	{
 		if (!player) return;
 		Track(player);
@@ -132,12 +132,13 @@ public:
 			name = player->m_pAnimationSlot->m_pArray[0].m_pAnimName;
 		char code[5]{};
 		if (!SamSheathPolicy::Code(code, name)) std::strcpy(code, "0000");
-		if (!std::strcmp(code, m_animation) && m_swordHidden == player->m_bSwordHidden) return;
+		// Grip/parking flag changes must not restart an in-progress charge clip.
+		if (!std::strcmp(code, m_animation)) {m_swordHidden=player->m_bSwordHidden;return;}
 		std::strcpy(m_animation, code);
 		m_swordHidden = player->m_bSwordHidden;
 		void* motion = SamResourceManager::Instance().GetSheathMotion(code);
 		if (motion) m_sheath->m_pBehavior->setDirectAnimation(
-			motion, nullptr, 0, 0.05f, 1.0f, 0x8000000, 0.0f, 1.0f);
+			motion, nullptr, 0, 0.05f, 1.0f, 0x8000000, 0.0f, playbackSpeed);
 		else m_sheath->m_pBehavior->requestAnimationByMap(player->m_bSwordHidden ? 4 : 5);
 	}
 

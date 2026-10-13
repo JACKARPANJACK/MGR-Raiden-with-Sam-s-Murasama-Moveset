@@ -47,7 +47,10 @@ namespace SamUltimatePolicy
         {"Boss left evade slash", "", "2530"},
         {"Boss right evade slash", "", "2540"},
         {"Boss advancing flurry", "", "2220"},
+        {"Sam template light combo extension", "", "9000", false, true, {"9001", "9002", "9003"}},
     };
+    inline Move LightExtension()
+    { return {"Sam template light combo extension","","9000",false,true,{"9001","9002","9003"}}; }
     inline unsigned Count() { return Moves.size(); }
     // Boss attacks belong to directional add-ons. Only Raiden specials use X.
     inline std::vector<unsigned> UltimateIndices = {8, 9, 13};

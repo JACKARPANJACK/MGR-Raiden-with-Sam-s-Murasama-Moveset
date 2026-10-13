@@ -7,6 +7,72 @@
 
 namespace SmgPolicy
 {
+    constexpr unsigned ControllerAim=0x400u,ControllerFire=0x4000u; // LB, RT.
+    constexpr bool ControllerAimHeld(unsigned buttons) {return (buttons&ControllerAim)!=0;}
+    inline bool ControllerFireHeld(unsigned buttons,float trigger)
+    {return (buttons&ControllerFire)!=0 || (std::isfinite(trigger) && trigger>.2f);}
+    inline bool BodyMotionCode(const char* name,char (&code)[5])
+    {
+        code[0]=0;
+        if(!name) return false;
+        if(!std::strncmp(name,"pl0010_",7) || !std::strncmp(name,"pl0000_",7)) name+=7;
+        const size_t length=std::strlen(name);
+        if(length!=4 && !(length==8 && !std::strcmp(name+4,".mot"))) return false;
+        for(unsigned i=0;i<4;++i)
+            if(!((name[i]>='0' && name[i]<='9') || (name[i]>='a' && name[i]<='f'))) return false;
+        std::memcpy(code,name,4);code[4]=0;return true;
+    }
+    inline bool SlideClip(const char* name)
+    {
+        char code[5];if(!BodyMotionCode(name,code)) return false;
+        return !std::strcmp(code,"0030") || !std::strcmp(code,"0031") || !std::strcmp(code,"0032") ||
+            !std::strcmp(code,"4230") || !std::strcmp(code,"4231") || !std::strcmp(code,"4232") ||
+            !std::strcmp(code,"9630") || !std::strcmp(code,"9631") || !std::strcmp(code,"9632");
+    }
+    inline bool MeleeClip(const char* name)
+    {
+        char code[5];if(!BodyMotionCode(name,code)) return false;
+        // 2eXX are the rifle donor clips; 257X are native subweapon clips.
+        if(code[0]=='2') return code[1]!='e' && std::strncmp(code,"257",3)!=0;
+        if(!std::strncmp(code,"350",3) || !std::strncmp(code,"353",3) || !std::strncmp(code,"354",3)) return true;
+        return !std::strncmp(code,"900",3) || !std::strncmp(code,"903",3) ||
+            !std::strncmp(code,"904",3) || !std::strncmp(code,"910",3) ||
+            !std::strncmp(code,"911",3) || !std::strncmp(code,"94c",3) || !std::strncmp(code,"941",3);
+    }
+    inline bool ParkourClip(const char* name)
+    {
+        char code[5];if(!BodyMotionCode(name,code)) return false;
+        // Native wall-run / wall-slide families, including MG RAY traversal.
+        return !std::strncmp(code,"60",2) || !std::strncmp(code,"d15",3);
+    }
+    constexpr bool GunOverlay(bool slide,bool parkour,bool airborne,bool locomotion,bool ninjaRun)
+    {return !slide && !parkour && (airborne || locomotion || ninjaRun);}
+    struct AimControl
+    {
+        static constexpr unsigned HoldTicks=10; // Maximum duration of a quick-fire tap.
+        unsigned frames=0;
+        bool down=false,aiming=false,requireRelease=false,triggered=false,tapped=false;
+        void Cancel() {frames=0;down=aiming=triggered=tapped=false;requireRelease=true;}
+        bool Tick(bool aim,bool trigger,bool enabled,bool slide,bool lock=false)
+        {
+            tapped=false;
+            if(!enabled || slide) {Cancel();if(!aim) requireRelease=false;return false;}
+            if(!aim)
+            {
+                const bool tap=down && frames<HoldTicks && !triggered && !requireRelease;
+                frames=0;down=aiming=requireRelease=triggered=false;
+                tapped=tap;
+                return tap;
+            }
+            if(requireRelease) return false;
+            down=true;
+            if(frames<HoldTicks) ++frames;
+            aiming=!lock && (frames>=HoldTicks || trigger);
+            // Lock + aim is a firing chord; releasing it must not add a tap.
+            triggered=triggered || trigger || lock;
+            return lock || (aiming && trigger);
+        }
+    };
     struct SprayGesture
     {
         SamDirectionalPolicy::Input direction;
@@ -130,13 +196,13 @@ namespace SmgPolicy
     inline float AirComboSpeed(float speed) {return (std::max)(speed,-0.025f);}
     struct FireControl
     {
-        unsigned delay=0, rounds=Magazine, reload=0, queued=0, ordinal=0;
+        unsigned delay=0, rounds=Magazine, reload=0, queued=0, ordinal=0,burstRemaining=0;
         Move move=Burst;
         GunChargePolicy::Hold charge;
         unsigned combo=0,chainWindow=0,chainStep=0;
         bool comboPose=false;
-        void Cancel() { queued=0;charge.Cancel();chainWindow=chainStep=0; }
-        void Tick(bool held,bool active,Move requested)
+        void Cancel() { queued=burstRemaining=0;charge.Cancel();chainWindow=chainStep=0; }
+        void Tick(bool held,bool active,Move requested,bool burst=false)
         {
             if(!active) {Cancel();return;}
             if(delay) --delay;
@@ -144,21 +210,24 @@ namespace SmgPolicy
             // Automatic fire starts on press, not release. Cancellation still
             // requires release before rearming after menus/story interruptions.
             charge.Tick(held,true,true);
+            if(burst && !charge.requireRelease && !reload)
+            {burstRemaining=3;move=requested;}
             const bool firing=held && !charge.requireRelease;
-            queued=firing?1u:0u;
+            queued=(firing || burstRemaining)?1u:0u;
             if(firing) move=requested;
             comboPose=false;
         }
         unsigned AnimationBank() const {return MotionBank;}
         const char* AnimationCode() const
         {return RecoilMotion;}
-        bool SummonRequested(bool held) const {return held && !charge.requireRelease;}
+        bool SummonRequested(bool held) const {return !reload && held && !charge.requireRelease;}
         bool Ready() const { return queued && rounds>=Cost(move) && !delay && !reload; }
         void Fired()
         {
             if(!Ready()) return;
             --queued;rounds-=Cost(move);++ordinal;delay=Interval;
-            if(!rounds || (queued && rounds<Cost(move))) reload=Reload;
+            if(burstRemaining) --burstRemaining;
+            if(!rounds || (queued && rounds<Cost(move))) {reload=Reload;burstRemaining=0;}
         }
         void RejectUnfunded() {if(queued && !reload && rounds<Cost(move)) reload=Reload;}
     };

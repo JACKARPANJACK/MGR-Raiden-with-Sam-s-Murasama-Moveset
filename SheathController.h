@@ -9,6 +9,8 @@
 #include "SamResourceManager.h"
 #include "SamSheathPolicy.h"
 #include "1-GameFileFlagCheck.h"
+#include "SamUltimatePolicy.h"
+#include "SamTemplateExecutionPolicy.h"
 
 class SheathController
 {
@@ -23,6 +25,10 @@ private:
     Hw::cVec4 m_savedOffset{}, m_savedRotation{};
     EntityHandle m_originalSheath{};
     EntityHandle m_samSheath{};
+    char m_directCode[5]{};
+    float m_directSpeed=1;
+    bool m_chargePose=false;
+    bool m_chargeGrip=false;
 
     static void Trace(const char* message)
     {
@@ -78,6 +84,7 @@ private:
         m_originalSheathId = 0;
         m_originalSheath = nullptr;
         m_samSheath = nullptr;
+        m_directCode[0]=0;m_directSpeed=1;m_chargePose=m_chargeGrip=false;
     }
 
     bool EnsureSamSheath(Pl0000* player)
@@ -289,7 +296,18 @@ private:
     void SyncSheathAnimation(Pl0000* player)
     {
         if (!player || !m_bAttachedToHip || player->m_pSheathEntity != m_samSheath.getEntity()) return;
-        __try { g_BxmFlagHandle.UpdateSheathAnimation(player); }
+        __try {
+            const bool direct=player->m_Rno0==SamUltimatePolicy::Action || player->m_Rno0==SamTemplateExecutionPolicy::Action;
+            if(!direct){m_directCode[0]=0;m_chargePose=m_chargeGrip=false;}
+            g_BxmFlagHandle.UpdateSheathAnimation(player,direct && m_directCode[0] ? m_directCode : nullptr,direct ? m_directSpeed : 1);
+            // DLC sub_4645F0 copies slot 0's body frame to the sheath each tick.
+            // SpeedTrack pauses/accelerates the body; an independent sheath
+            // clock drifts even when both motions started in the same frame.
+            Entity* sheath=m_samSheath.getEntity();
+            if(sheath && sheath->m_pBehavior)
+                reinterpret_cast<void(__thiscall*)(Behavior*,int,Behavior*)>(shared::base+0x695EE0)(
+                    sheath->m_pBehavior,0,player);
+        }
         __except (EXCEPTION_EXECUTE_HANDLER) {}
     }
 
@@ -317,6 +335,7 @@ public:
         }
         else
         {
+            m_chargePose=m_chargeGrip=false;m_directCode[0]=0;
             RestoreSheathToBack(player);
         }
     }
@@ -338,8 +357,9 @@ public:
             Entity* sam = m_samSheath.getEntity();
             if (sam && player->m_pSheathEntity == sam)
             {
-                g_BxmFlagHandle.CheckSheath_2097152Flag0(player);
-                g_BxmFlagHandle.CheckSheath_2097152Flag1(player);
+                const bool charge=m_chargePose && player->m_Rno0==SamUltimatePolicy::Action;
+                g_BxmFlagHandle.CheckSheath_2097152Flag0(player,charge);
+                g_BxmFlagHandle.CheckSheath_2097152Flag1(player,m_chargeGrip && player->m_Rno0==SamUltimatePolicy::Action);
                 m_bAttachedToHand = player->getConstraintById(17) != nullptr;
                 // Native visibility updates can re-enable the retained original.
                 Entity* original = m_originalSheath.getEntity();
@@ -355,12 +375,19 @@ public:
         }
     }
 
-    void AnimateSheathDirect(Pl0000* player, const char* code)
+    void AnimateSheathDirect(Pl0000* player, const char* code, float speed=1)
     {
         if (!player || !code || !m_bAttachedToHip || player->m_pSheathEntity != m_samSheath.getEntity()) return;
-        __try { g_BxmFlagHandle.UpdateSheathAnimation(player, code); }
+        SamSheathPolicy::Code(m_directCode,code);m_directSpeed=speed;
+        __try { g_BxmFlagHandle.UpdateSheathAnimation(player, code, speed); }
         __except (EXCEPTION_EXECUTE_HANDLER) {}
     }
 
     bool IsAttachedToHip() const { return m_bAttachedToHip; }
+    void SetChargePose(Pl0000* player,bool windup,bool release=false)
+    { if(!player)return;TrackPlayer(player);m_chargePose=windup;m_chargeGrip=windup || release;Update(player); }
+    bool Ready(Pl0000* player)const
+    {return player && player==m_pLastPlayer && m_bAttachedToHip && !m_swapFaulted &&
+        player->m_pSheathEntity==m_samSheath.getEntity() && player->m_pSheathEntity &&
+        player->m_pSheathEntity->m_pBehavior && player->m_pSheathEntity->m_ObjId==static_cast<eObjID>(0x11404);}
 };

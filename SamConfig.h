@@ -67,6 +67,10 @@ namespace SamConfig
                 SamUltimatePolicy::Moves.push_back(std::move(move));
             }
         }
+        // This reserved light continuation is part of the combat graph. Older
+        // INIs list only 19 specials and must not remove it when loading.
+        if(SamUltimatePolicy::Moves.size()<=19)SamUltimatePolicy::Moves.resize(20);
+        SamUltimatePolicy::Moves[19]=SamUltimatePolicy::LightExtension();
         for (int direction = 1; direction <= 4; ++direction)
             for (int* table : {SamDirectionalPolicy::heldLight, SamDirectionalPolicy::heldHeavy,
                 SamDirectionalPolicy::flickLight, SamDirectionalPolicy::flickHeavy})

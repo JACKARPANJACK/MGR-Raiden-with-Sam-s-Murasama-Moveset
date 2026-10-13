@@ -13,6 +13,8 @@
 #include "SamVisualEffects.h"
 #include <BehaviorAppBase.h>
 #include "SamPlayerIdentity.h"
+#include "WallTraversalController.h"
+#include "SamTemplateExecutionPolicy.h"
 
 // A record belongs to an engine allocation, not to whichever player pointer
 // happens to be in g_Scene this frame. Records survive until native shutdown.
@@ -38,6 +40,11 @@ class SamNativeRuntime
     bool allocationReady = false;
     static void __fastcall CombatAction(Pl0000* player, void*)
     {
+        if(Get().Active(player)&&WallTraversalController::Get().HandleAction(player))return;
+        if(Get().Active(player) && player->m_Rno0==SamTemplateExecutionPolicy::Action) {
+            reinterpret_cast<void(__thiscall*)(Behavior*,float,float)>(shared::base+0x6C80A0)(player,1,1);
+            return;
+        }
         if (Get().Active(player) && player->m_Rno0 == SamUltimatePolicy::Action)
         {
             // Shared animation motion update used by the reference custom-action
@@ -76,6 +83,16 @@ class SamNativeRuntime
     static void __fastcall PlayerEffectOwner(Pl0000* player, void*, int number, cEspControler* controller)
     {
         NativeEffect(player,number,controller,0x6A5570);
+    }
+    static void __fastcall SequenceEffectParents(Pl0000* player, void*, void* info, int a, int b)
+    {
+        const auto found=Get().records.find(player);
+        const bool raiden=found!=Get().records.end() && found->second->raidenDamage;
+        // EffectTrack calls slot 248, independently of the createEffect slots.
+        // Raiden's callback supplies no parent 2. DLC charge ESTs bind to that
+        // parent (the sheath), so retaining Raiden's callback hides their glow.
+        const uintptr_t callback=raiden ? found->second->original[0x248/4] : shared::base+0x4646D0;
+        reinterpret_cast<void(__thiscall*)(Pl0000*,void*,int,int)>(callback)(player,info,a,b);
     }
     static CollisionAttackData* RaidenAttack(Pl0000* player, Record& record, const uint16_t* number)
     {
@@ -240,6 +257,7 @@ public:
         std::memcpy(record.table + 0x328/4,sam + 0x328/4,0x100);
         record.table[0x3C8 / 4] = reinterpret_cast<uintptr_t>(&CombatAction);
         record.table[0x130 / 4] = reinterpret_cast<uintptr_t>(&AttackInfo);
+        record.table[0x248 / 4] = reinterpret_cast<uintptr_t>(&SequenceEffectParents);
         record.table[0x3DC / 4] = reinterpret_cast<uintptr_t>(&PlayerEffectOwner);
         record.table[0x3E0 / 4] = reinterpret_cast<uintptr_t>(&PlayerEffect);
         record.raidenParameters = player->m_pBattleParameterImplement;

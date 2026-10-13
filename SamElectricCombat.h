@@ -167,6 +167,14 @@ public:
     {
         for (auto& v : victims) if (v->grapple) Release(*v);
     }
+    void ReleaseTarget(Entity* target)
+    {
+        for(auto& v:victims) if(v->handle.getEntity()==target) {
+            Release(*v);
+            if(v->visualTicks)v->visual.FadeUnits(3,0);
+            v->visualTicks=0;
+        }
+    }
     void Tick(Pl0000* player, bool regularAttack, bool heavy, bool lightningUltimate, bool grabActive)
     {
         for (auto& v : victims)

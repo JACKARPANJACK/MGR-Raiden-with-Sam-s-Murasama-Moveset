@@ -6,6 +6,7 @@
 #include "gui.h"
 #include "SamResourceManager.h"
 #include "SamStagePolicy.h"
+#include "GunRuntimeLog.h"
 #include <cItemPossessionBase.h>
 #include <cObjReadManager.h>
 #include <array>
@@ -22,6 +23,15 @@ class NativeLauncherSubweapon
     GunChargePolicy::Hold charge;
     unsigned pendingTier=0,cooldown=0,pendingAge=0;
     bool pending=false,reserved=false;
+    bool nativeHeld=false;
+    const char* lastStage="idle";
+    void Trace(const char* stage)
+    {
+        if(!std::strcmp(lastStage,stage)) return;
+        lastStage=stage;
+        GunRuntimeLog::Write("AERIAL slot=%d stage=%s air=%d state=%08X node=%d ticks=%u nativeInput=%d",
+            equipped,stage,owner?owner->isInAir()!=FALSE:0,owner?owner->m_Rno0:0,airNode,airTicks,nativeHeld);
+    }
     int airNode=-1;
     unsigned airTicks=0,airRemaining=0;
     bool OwnsAirPose() const
@@ -43,6 +53,8 @@ class NativeLauncherSubweapon
     }
     bool BeginAirPose()
     {
+        auto* inventory=Inventory();
+        if(!inventory || inventory->noUse() || inventory->getEssentialPossession()<=0) return false;
         const auto clip=SamResourceManager::Instance().GetRaidenClip(GunChargePolicy::AirMotion(equipped));
         const unsigned length=SamStagePolicy::Length(clip.motion);
         if(!length || !owner->isInAir()) return false;
@@ -223,7 +235,18 @@ public:
         g_Keyboard.m_pOn[2]=(g_Keyboard.m_pOn[2]&~Key)|keyOn;g_Keyboard.m_pTrig[2]=(g_Keyboard.m_pTrig[2]&~Key)|keyTrig;
         g_Keyboard.m_pRep[2]=(g_Keyboard.m_pRep[2]&~Key)|keyRep;reserved=false;
     }
-    void Cancel() {RestoreInputs();charge.Cancel();pending=false;pendingAge=0;EndAirPose();ReleaseWeapon();}
+    void Cancel()
+    {
+        const bool mappedHeld=reserved?nativeHeld:
+            owner && (owner->m_CurrentInput.m_On&owner->m_ButtonUseSubweapon)!=0;
+        RestoreInputs();
+        // Ground idle must not suppress the first new press after jumping.
+        // A button held through cancellation still needs a fresh release.
+        charge.Cancel(GunChargePolicy::AirInputHeld((GetAsyncKeyState('C')&0x8000)!=0,
+            owner && (g_dbPad.m_On&(owner->m_ButtonUseSubweapon&~0xFu))!=0,mappedHeld));
+        if(pending) Trace("cancelled");
+        pending=false;pendingAge=0;EndAirPose();ReleaseWeapon();
+    }
     void Forget(Pl0000* player)
     {if(player==owner) {Cancel();owner=nullptr;equipped=0;cooldown=0;}}
     void SceneReleased()
@@ -246,17 +269,26 @@ public:
             foreground!=GetCurrentProcessId() || gui::IsMenuVisible() || g_StaFlags.STA_PAUSE || player->isBladeModeActive() ||
             !EncounterPolicy::CanThrow(player->m_Rno0,player->isAlive()!=FALSE,player->isInAir()!=FALSE,story,false))
         {Cancel();return;}
+        // Capture mapped mouse/keyboard input before Reserve removes it from
+        // the native ground-only action graph. C remains an alternate binding.
+        nativeHeld=(player->m_CurrentInput.m_On&player->m_ButtonUseSubweapon)!=0;
         Reserve();if(Trigger::StpFlags.STP_OBJ) return;
         if(airNode>=0)
         {
-            if(!OwnsAirPose()) {Cancel();return;}
+            if(!OwnsAirPose()) {Trace("pose-interrupted");Cancel();return;}
             ++airTicks;
-            if(airRemaining && !--airRemaining) EndAirPose();
+            if(airRemaining && !--airRemaining)
+            {
+                // A delayed resource failure must not restart the throw pose.
+                if(pending) {Cancel();return;}
+                EndAirPose();
+            }
         }
         if(cooldown) --cooldown;
-        const bool held=(GetAsyncKeyState('C')&0x8000)!=0 || padOn!=0;
+        const bool held=GunChargePolicy::AirInputHeld((GetAsyncKeyState('C')&0x8000)!=0,padOn!=0,nativeHeld);
+        if(held && !charge.down && !pending) Trace("press");
         if(charge.Tick(held,true,!cooldown && !pending && airNode<0))
-        {pending=true;pendingTier=GunChargePolicy::Tier(charge.releasedFrames);pendingAge=0;}
+        {pending=true;pendingTier=GunChargePolicy::Tier(charge.releasedFrames);pendingAge=0;Trace("queued");}
         const bool ready=Ready();
         if(!GunChargePolicy::GrenadeSlot(equipped) && ready) Weapon();
     }
@@ -264,17 +296,23 @@ public:
     {
         if(player!=owner || !player || !pending || Trigger::StpFlags.STP_OBJ) return;
         const bool story=EncounterPolicy::Scripted(g_StaFlags.STA_EVENT,g_StaFlags.STA_QTE,g_StaFlags.STA_CODEC,g_StaFlags.STA_SOFT_EVENT);
+        DWORD foreground=0;GetWindowThreadProcessId(GetForegroundWindow(),&foreground);
         if(!g_pPlayerManager || g_pPlayerManager->getSubWeaponEquipped()!=equipped ||
-            gui::IsMenuVisible() || g_StaFlags.STA_PAUSE || player->isBladeModeActive() ||
+            foreground!=GetCurrentProcessId() || gui::IsMenuVisible() || g_StaFlags.STA_PAUSE || player->isBladeModeActive() ||
             !EncounterPolicy::CanThrow(player->m_Rno0,player->isAlive()!=FALSE,player->isInAir()!=FALSE,story,false) ||
             !player->isAlive() || !player->isInAir()) {Cancel();return;}
-        if(!Ready()) {if(++pendingAge>=60) Cancel();return;}
-        if(airNode<0) {if(!BeginAirPose() && ++pendingAge>=60) Cancel();return;}
+        if(!Ready()) {Trace("waiting-resource");if(++pendingAge>=60) Cancel();return;}
+        if(airNode<0)
+        {
+            if(BeginAirPose()) Trace("pose-started");
+            else {Trace("pose-unavailable-or-no-ammo");if(++pendingAge>=60) Cancel();}
+            return;
+        }
         if(!OwnsAirPose()) {Cancel();return;}
         if(airTicks<GunChargePolicy::AirReleaseTicks(equipped)) return;
         if(GunChargePolicy::GrenadeSlot(equipped)?FireGrenade():Fire())
-        {pending=false;cooldown=GunChargePolicy::GrenadeSlot(equipped)?30:GunChargePolicy::Cooldown(pendingTier);}
+        {Trace("spawned-ammo-spent");pending=false;cooldown=GunChargePolicy::GrenadeSlot(equipped)?30:GunChargePolicy::Cooldown(pendingTier);}
         // A failed release must not spawn late from a recovery/falling pose.
-        else {pending=false;pendingAge=0;cooldown=30;}
+        else {Trace("spawn-failed-no-ammo-spent");pending=false;pendingAge=0;cooldown=30;}
     }
 };

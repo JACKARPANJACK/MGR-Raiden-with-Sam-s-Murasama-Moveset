@@ -16,6 +16,7 @@
 #include "gui.h"
 #include <Events.h>
 #include "SamConfig.h"
+#include "WallTraversalController.h"
 #include <intrin.h>
 #include "SamEffectPolicy.h"
 
@@ -59,6 +60,10 @@ void gui::ToggleMovesetFromGUI()
 }
 
 int gui::SelectedWeapon() { return WeaponSwitcher::Get().Selected(); }
+void gui::GetWallTraversalView(bool& enabled,int& mode,unsigned& ticks,float& distance,const char*& status) {
+    auto& wall=WallTraversalController::Get();enabled=wall.Enabled();wall.View(mode,ticks,distance);status=wall.Status();
+}
+void gui::EnableWallTraversal(bool enabled) {WallTraversalController::Get().Enable(enabled);}
 const char* gui::DualBladeStatus() { return DualBladeWeapon::Get().Status(); }
 int gui::PendingWeapon() { return WeaponSwitcher::Get().Pending(); }
 void gui::SelectWeapon(int index) { if (SamPlayerIdentity::Eligible(g_Scene.m_pPlayer)) WeaponSwitcher::Get().Select(index); }
@@ -157,6 +162,7 @@ static void __fastcall ShutdownExtendedPlayer(Pl0000* player, void*)
     const bool wasCurrentPlayer = !g_Scene.m_pPlayer || g_Scene.m_pPlayer == player;
     WeaponSwitcher::Get().Forget(player);
     SaiPullController::Get().Forget(player);
+    WallTraversalController::Get().Forget(player);
     KunaiSubweapon::Get().Forget(player);
     SamNativeRuntime::Get().BeforeShutdown(player);
     SamMovesetManager::Instance().ForgetPlayer(player);
@@ -245,6 +251,20 @@ static void __fastcall Custom_CreatePlayerEffect(Behavior* actor, void*, int id,
     if (mapped != id && SamNativeRuntime::Get().CreatePlayerEffect(
         static_cast<Pl0000*>(actor),mapped,controller)) return;
     if (oCreatePlayerEffect) oCreatePlayerEffect(actor, id, controller);
+}
+
+using PlayActorSound=int(__cdecl*)(const char*,void*,int,int);
+static PlayActorSound oPlayActorSound=nullptr;
+static int __cdecl Custom_PlayActorSound(const char* event,void* emitter,int flags,int control)
+{
+    if(SamVoicePolicy::Attack(event)==event)
+        return oPlayActorSound ? oPlayActorSound(event,emitter,flags,control) : 0;
+    Pl0000* player=g_Scene.m_pPlayer;
+    const bool owned=player && (emitter==player || emitter==player->m_pEntity) && IsMovesetPlayer(player);
+    const bool combat=owned && (SamUltimatePolicy::Attack(player->m_Rno0) ||
+        player->m_Rno0==SamUltimatePolicy::Action || player->m_Rno0==SamTemplateExecutionPolicy::Action ||
+        SamExecutionPolicy::Native(player->m_Rno0) || player->isBladeModeActive());
+    return oPlayActorSound ? oPlayActorSound(SamVoicePolicy::Select(event,owned,combat),emitter,flags,control) : 0;
 }
 
 static void __fastcall Custom_Animation_RequestSequence(Animation* animation, void*, const char* name, int node)
@@ -355,11 +375,8 @@ static int __fastcall Custom_Behavior_RequestAnimationByName(Behavior* pThis, vo
         KunaiSubweapon::GetSmg().ObserveAnimation(anim, node, startFrame, playbackSpeed);
     }
     const bool nativeSam = active && SamNativeRuntime::Get().Active(g_Scene.m_pPlayer);
-    if (active && anim && (std::strstr(anim, "3500") || std::strstr(anim, "3501")))
-    {
-        if (!SamMovesetManager::Instance().IsBossEnderActive())
-            SamMovesetManager::Instance().TriggerAddon(7);
-    }
+    // Animation names are not input gestures. Only the directional policy's
+    // complete 360 + Heavy recognizer may request Judgement Cut.
     char bladeCode[5]{};
     // Native Sam state nodes also request 4xxx/8xxx/9xxx clips for taunts,
     // finishers and Datsu. Resolve their DLC pair without combat remapping.
@@ -428,6 +445,7 @@ static int __fastcall Custom_Behavior_RequestAnimationByName(Behavior* pThis, vo
 static void __fastcall Custom_Pl0000_HandleActions(Pl0000* pThis, void* edx)
 {
     const bool raiden = pThis == g_Scene.m_pPlayer && SamPlayerIdentity::Eligible(pThis);
+    if(raiden&&WallTraversalController::Get().HandleAction(pThis))return;
     if(raiden) SaiPullController::Get().ApplyAttackInput(pThis);
     if (raiden)
         SamMovesetManager::Instance().RecordActionHandler("raiden");
@@ -459,6 +477,9 @@ static void __cdecl CustomTickGame()
             SamPlayerIdentity::Eligible(player))
         {
             SamMovesetManager::Instance().UpdateSceneSafety(player);
+            SamMovesetManager::Instance().UpdateGroundSubweapon(player);
+            WallTraversalController::Get().Tick(player,SamNativeRuntime::Get().Active(player),
+                SamMovesetManager::Instance().IsBossEnderActive()||SamMovesetManager::Instance().IsRoundTripActive());
             WeaponSwitcher::Get().Tick(player);
             DualBladeWeapon::Get().Tick(player);
             SaiPullController::Get().Tick(player);
@@ -474,6 +495,7 @@ static void __cdecl CustomTickGame()
             SaiPullController::Get().Tick(nullptr);
             KunaiSubweapon::Get().Tick(nullptr);
             NativeKnifeInventory::raidenScene = false;
+            WallTraversalController::Get().Tick(nullptr,false,false);
         }
     }
     __except (GunRuntimeLog::Exception(GetExceptionInformation(),"pre-tick")) {}
@@ -491,6 +513,7 @@ static void __cdecl CustomTickGame()
             KunaiSubweapon::Get().PostTick(player);
             SaiPullController::Get().PostTick(player);
             DualBladeWeapon::Get().PostTick(player);
+            WallTraversalController::Get().PostTick(player);
         }
     }
     __except (GunRuntimeLog::Exception(GetExceptionInformation(),"post-tick")) {}
@@ -574,6 +597,8 @@ static void InitHooks()
     );
     static SafeHook::Hook effects((void*)(shared::base + 0x7C3470),
         (void*)Custom_CreatePlayerEffect, true, (void**)&oCreatePlayerEffect);
+    static SafeHook::Hook attackVoice((void*)(shared::base+0xA5E0C0),
+        (void*)Custom_PlayActorSound,true,(void**)&oPlayActorSound);
 }
 
 BOOL APIENTRY DllMain(HMODULE hModule, DWORD ul_reason_for_call, LPVOID lpReserved)

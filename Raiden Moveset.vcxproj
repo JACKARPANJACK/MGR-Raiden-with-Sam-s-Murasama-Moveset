@@ -66,6 +66,10 @@
     <ClInclude Include="framework.h" />
     <ClInclude Include="pch.h" />
     <ClInclude Include="gui.h" />
+    <ClInclude Include="WallTraversalController.h" />
+    <ClInclude Include="WallTraversalPolicy.h" />
+    <ClInclude Include="WallTraversalMotion.h" />
+    <ClInclude Include="WallClingPose.h" />
     <ClInclude Include="DualBladeWeapon.h" />
     <ClInclude Include="DualBladePolicy.h" />
     <ClInclude Include="WeaponAttachment.h" />

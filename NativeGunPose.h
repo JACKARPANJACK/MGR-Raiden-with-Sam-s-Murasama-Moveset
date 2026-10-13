@@ -16,9 +16,10 @@ class NativeGunPose
     const void* lowerClip=nullptr;
     unsigned lowerBlend=8;
     D3DXMATRIX bodyBasis;
-    float facing=0,pitch=0,armYaw=0;
+    float facing=0,pitch=0,armYaw=0,recoil=0;
     bool aiming=false;
     cParts* gunPart=nullptr;
+    EntityHandle poseOwner,poseGun;
     Hw::cMtx gunMatrix;
     unsigned short gunFlags=0;
     static bool Descendant(cParts* part,cParts* root)
@@ -44,15 +45,23 @@ class NativeGunPose
 public:
     void BeginFrame()
     {
-        for(auto& s:saved) {s.part->m_LocalMatrix=s.matrix;s.part->m_PartsFlag.m_Flag=s.flags;}
+        Entity* actor=poseOwner.getEntity();
+        for(auto& s:saved)
+            if(actor && actor->m_pBehavior && actor->m_pBehavior->getPartsPtr(s.bone)==s.part)
+            {s.part->m_LocalMatrix=s.matrix;s.part->m_PartsFlag.m_Flag=s.flags;}
         saved.clear();
-        if(gunPart) {gunPart->m_LocalMatrix=gunMatrix;gunPart->m_PartsFlag.m_Flag=gunFlags;gunPart=nullptr;}
+        Entity* weapon=poseGun.getEntity();
+        if(gunPart && weapon && weapon->m_pBehavior && weapon->m_pBehavior->getPartsPtr(0)==gunPart)
+        {gunPart->m_LocalMatrix=gunMatrix;gunPart->m_PartsFlag.m_Flag=gunFlags;}
+        gunPart=nullptr;poseOwner=EntityHandle{};poseGun=EntityHandle{};
     }
-    void Reset() {BeginFrame();aiming=false;pitch=armYaw=0;lowerClip=nullptr;lowerSamples.clear();}
+    void Reset() {BeginFrame();aiming=false;pitch=armYaw=recoil=0;lowerClip=nullptr;lowerSamples.clear();}
+    void KickRecoil(float amount=0.10f) {recoil=(std::max)(recoil,amount);}
     float Facing() const {return facing;}
     void Prepare(Pl0000* player,const void* reference,const Hw::cVec4& target,float followStep=0.12f)
     {
         cParts* pelvis=player?player->getPartsPtr(0):nullptr;if(!pelvis || !reference) return;
+        poseOwner=player->m_pEntity;
         const auto position=pelvis->m_LocalMatrix.r[3];
         const float nativeYaw=player->m_Rot.y;
         const float desired=nativeYaw+(std::clamp)(GunAimMath::Wrap(
@@ -137,8 +146,9 @@ public:
         const auto reference=GunAimMath::RifleGrip(hand);
         const auto direction=goal-GunAimMath::Muzzle(reference);
         const float horizontal=std::hypot(direction.x,direction.z);
-        const float desiredPitch=(std::clamp)(std::atan2(direction.y,horizontal),-D3DX_PI*.305556f,D3DX_PI*.305556f);
+        const float desiredPitch=(std::clamp)(std::atan2(direction.y,horizontal)+recoil,-D3DX_PI*.305556f,D3DX_PI*.305556f);
         pitch=GunAimMath::FollowAngle(pitch,desiredPitch,followStep);
+        recoil*=0.68f;if(recoil<0.001f) recoil=0;
         const float desiredArm=(std::clamp)(GunAimMath::Wrap(std::atan2(direction.x,direction.z)-facing),-.436332f,.436332f);
         armYaw=GunAimMath::FollowAngle(armYaw,desiredArm,followStep);
         const auto l=left->m_LocalMatrix.r[3],r=right->m_LocalMatrix.r[3];
@@ -172,6 +182,7 @@ public:
         // This also makes rendering, muzzle flash and bullet origin agree.
         std::memcpy(&hand,&wrist->m_LocalMatrix,sizeof(hand));
         const auto barrel=GunAimMath::RifleGrip(hand);
+        poseGun=gun->m_pEntity;
         gunPart=muzzle;gunMatrix=muzzle->m_LocalMatrix;gunFlags=muzzle->m_PartsFlag.m_Flag;
         std::memcpy(&muzzle->m_LocalMatrix,&barrel,sizeof(barrel));muzzle->m_PartsFlag.m_Flag|=4;
         (gun->m_pParent?gun->m_pParent:gun)->updateHierarchicalTransformations();

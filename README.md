@@ -12,6 +12,13 @@ Full controls and move inputs: [Sam movelist](SAM_MOVELIST.md).
 
 ## Controls
 
+- **Hold Ninja Run near a structure**: attach from the ground or air. Facing its
+  wall runs upward; facing along it runs sideways. A clear roof permits a swept
+  step onto the top. No native Ninja Run interaction marker is required.
+- **Hold Z**: wall cling; release to drop. **Jump** kicks away.
+  Controller cling uses **Ninja Run + L3**. **V** also requests wall traversal.
+  See [wall traversal](WALL_TRAVERSAL.md) for current limits and diagnostics.
+
 - **G**: toggle Sam's sword moveset.
 - **0**: open the menu, including the weapon selector.
 - **Q / E** (also **[ / ]**): select previous / next weapon.
@@ -183,7 +190,11 @@ msbuild 'Raiden Moveset.vcxproj' /p:Configuration=Release /p:Platform=Win32 /m
 Dear ImGui is included under `third_party/imgui`. Output is
 `Release/Raiden Moveset.asi`. Build does not automatically overwrite the game.
 Install with `tools/install.ps1 -GameDirectory 'path to game'` while the game is
-closed. Restart the game after changing the installed ASI. Avoid loading a
+closed. The installer also requires the paired animation bundle in
+`Release/SamTemplateAnims`; build it from the local campaign template using
+`tools/build_sam_template_executions.py` as described in
+[directional controls](DIRECTIONAL_MOVES.md).
+Restart the game after changing the installed ASI. Avoid loading a
 separate weapon-switcher plugin alongside this integrated version.
 
 ## Validation and local files
@@ -225,3 +236,9 @@ See [RUNTIME_REPAIR.md](RUNTIME_REPAIR.md) for evidence and validation limits.
 Native inventory rendering, save/reload behavior, and combat still need gameplay
 verification. The plugin re-registers a missing knife item; it does not alter the
 save-file format or replace another inventory item.
+
+The light-combo continuation uses the campaign template's `pl1400_9000` through
+`9003`. Build its portable bundle before installation:
+`python tools/build_sam_light_extensions.py --template "E:/Sam in Raiden Campaign/mods/PlayerEnemy/pl/pl1400.dat"`.
+In Sam mode, keep pressing neutral Light through the base finisher to queue the
+extension; each subsequent Light press buffers its next stage.

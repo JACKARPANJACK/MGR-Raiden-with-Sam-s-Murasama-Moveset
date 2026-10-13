@@ -153,6 +153,11 @@ static void RenderSamDebug()
         ImGui::TextWrapped("D-pad Down: next weapon, cycling through the full list including wp2050 dual swords. Mouse wheel Up / Down or Q / E: previous / next weapon. Sam attacks can swap in their final 6 recovery frames. G / Select toggles Sam.");
         if(gui::PendingWeapon()>=0) ImGui::Text("Weapon switch queued...");
         ImGui::TextWrapped("%s",gui::DualBladeStatus());
+        bool walls=false;int wallMode=0;unsigned wallTicks=0;float wallDistance=0;const char* wallStatus=nullptr;
+        gui::GetWallTraversalView(walls,wallMode,wallTicks,wallDistance,wallStatus);
+        if(ImGui::Checkbox("Wall traversal",&walls))gui::EnableWallTraversal(walls);
+        ImGui::Text("Wall: %s | %.2fm | %.1fs",wallStatus?wallStatus:"ready",wallDistance,wallTicks/60.0f);
+        ImGui::TextWrapped("Custom wallruns require a building or large barricade face. Small props and native parkour segments use regular Ninja Run. Y/secondary attack starts wallsliding: W/Up goes up, S/Down goes down, and A/D steers sideways. Z/L3 clings; X also slides. Wallruns jump over obstacles when the path and catch are clear. Jump launches away; Light Attack or F launches toward an enemy.");
         static const char* kunaiNames[]={"Native inventory subweapon","Stun kunai","Explosive kunai","Heat-blade kunai","Bladewolf heatblades","Kriss Vector SMG"};
         int selectedKunai=gui::SelectedKunai();
         if(ImGui::Combo("Secondary weapon##Subweapon",&selectedKunai,kunaiNames,IM_ARRAYSIZE(kunaiNames))) gui::SelectKunai(selectedKunai);
@@ -168,9 +173,9 @@ static void RenderSamDebug()
             const char* gunStatus[]={"inactive","unsupported game executable","loading gun assets","gun animations missing","hand attachment occupied","gun creation failed","muzzle unavailable","bullet creation failed","gun attached and ready","gun effect bank unavailable"};
             ImGui::Text("Gun: %s",smg.status<10?gunStatus[smg.status]:"unavailable");
             ImGui::Text("Native secondary menu: %s",smg.menuLinked?"linked":"unavailable on this executable / hook conflict");
-            ImGui::TextWrapped("Close this menu, then press C to fire the selected gun. Mouse / right stick aims at the center reticle; lock-on follows the selected enemy. Amber means the rifle is still raising or at its pitch limit.");
+            ImGui::TextWrapped("RPG/Stinger-style aim: hold C / LB to aim with the crosshair; LMB / RT fires. Quick-tap C / LB for a burst at the locked or nearest enemy. Lock-on + C / LB fires juggling bullets.");
         }
-        ImGui::TextWrapped("Gun: hold C to fire immediately and continuously; release to stop and hide the rifle. Flick + C sprays over a wide area. You can enter shooting during attacks, running, jumps and slides. Empty magazines reload automatically, then resume if C is still held. Hits keep airborne enemies juggled and briefly slow Raiden's fall.");
+        ImGui::TextWrapped("Gun: hold C / LB to aim; hold LMB / RT for continuous fire. Aim alone never shoots. A quick C / LB tap releases a three-round burst. Quick taps choose the locked or nearest enemy. Lock-on + C / LB fires juggling bullets without entering aim. Flick + firing sprays over a wide area. Shooting works during Ninja Run and jumps. Ninja Run retains the gun upper-body pose and native leg movement. Slides and parkour suppress the gun pose and firing. Release C / LB to leave aim and hide the gun. Empty magazines reload automatically while the rifle stays held; a held trigger resumes shooting when reloading finishes. Hits juggle airborne enemies.");
         ImGui::TextWrapped("Hold C / subweapon to precision aim. Tap: selected payload. Release after 0.3s: stun; 0.75s: explosive. Full charge at 1.5s automatically fires up to ten knives in a 90-degree fan, then cooldown. Release C before charging again. Mouse / right stick aims. Air, Blade Mode and combo throws consume one native knife per projectile.");
         ImGui::TextWrapped("RPG / Stinger: select in the native secondary menu. Ground aiming stays native. In air, tap C to fire; hold then release at 0.5s / 1.5s for 2x / 3x native damage. Grenade/EMP/chaff/smoke slots can also be thrown in air. Uses one native rocket per successful shot. Cutscenes/QTEs, weapon changes and focus loss cancel charge. F7 / F8 chooses the knife / SMG mode.");
         ImGui::TextWrapped("Runtime repair: Sam damage table, 20% faster attacks/Ninja Run, nearby-enemy targeting, timed grab impacts and bounded Round Trip hits.");
@@ -182,9 +187,11 @@ static void RenderSamDebug()
             gui::CycleNextUltimate();
         }
 
-        ImGui::TextWrapped("Flick + Light: forward rapid slashes, back grab, left sweep, right tackle. Flick + Heavy: forward JCE, back Round Trip, left sonic slash, right leap.");
-        ImGui::TextWrapped("Hold direction + Light: forward rapid slashes, back finisher, left sweep, right leap. Hold direction + Heavy: forward charged slash, back stone burst, left sonic slash, right Round Trip.");
-        ImGui::TextWrapped("360 Stick Flick + Heavy: Judgement Cut charge (hold Heavy to charge, release to unleash).");
+        ImGui::TextWrapped("Hold one direction and press Light or Heavy. Taps and holds use the same mapping. Keep that direction and press the next attack within 0.6 seconds to enter a combo; release the first attack before pressing the next. L = Light, H = Heavy.");
+        ImGui::TextWrapped("Forward: L evade, H charged slash, LL rapid slashes, LH lightning draw, HL thunder slice. Back: L sweep finisher, H stone burst, LL sweeping combo, LH grab/smash, HL Round Trip.");
+        ImGui::TextWrapped("Left: L left evade, H backward evade, LL tackle/smash, LH sonic slash. Right: L right evade, H advancing flurry, LL leap, LH lightning storm.");
+        ImGui::TextWrapped("360 stick + Heavy: Judgement Cut. Keep pressing neutral Light to extend the regular Sam light combo through template attacks 9000 > 9001 > 9002 > 9003. Each extra press buffers the next stage; stopping ends the string. X remains a shortcut for Raiden specials.");
+        ImGui::TextWrapped("F cycles paired grab/smash, charge stab and sweeping finisher. Executions require a living cyborg within 3m and at or below 25% HP. A confirmed parry counter can execute its attacker under the same conditions.");
         static const char* s_moveNames[] = {
             "Raiden thunder slice (pl0010 2400)",
             "Raiden lightning storm (pl0010 3501)",
@@ -363,11 +370,6 @@ void gui::OnEndScene()
     {
         const auto size=ImGui::GetIO().DisplaySize;
         ImVec2 center(size.x*.5f,size.y*.5f);
-        if(gunAim.hasScreenPos && gunAim.screenX >= 0.0f && gunAim.screenX <= size.x &&
-           gunAim.screenY >= 0.0f && gunAim.screenY <= size.y)
-        {
-            center = ImVec2(gunAim.screenX, gunAim.screenY);
-        }
         auto* draw=ImGui::GetForegroundDrawList();
         const ImU32 color=gunAim.locked ? IM_COL32(80,255,180,240) :
                          (gunAim.solved ? IM_COL32(230,240,255,230) : IM_COL32(255,190,80,230));

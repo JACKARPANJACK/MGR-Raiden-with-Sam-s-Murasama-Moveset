@@ -31,13 +31,13 @@ namespace SamSheathPolicy
     }
     inline const char* MotionCode(const char* code)
     {
-        // Sam's player charge clips use a separate scabbard numbering scheme.
+        // Native DLC player/scabbard maps use identical IDs and clip codes.
+        // Only imported boss charge stages need a playable scabbard fallback.
         struct Pair { const char* actor; const char* sheath; };
         constexpr Pair pairs[] = {
-            {"2100", "3010"}, {"2030", "3010"}, {"2102", "3016"},
-            {"2101", "3017"}, {"2032", "3015"}, {"2038", "3014"},
-            {"2040", "3020"}, {"2041", "3022"}, {"2042", "3024"},
-            {"2048", "3024"}
+            {"3000", "2250"}, {"3010", "2250"}, {"3020", "2250"}, {"92e0", "2250"},
+            {"3003", "2253"}, {"3004", "2253"}, {"3014", "2253"}, {"3024", "2253"}, {"3015", "2253"},
+            {"92e4", "2253"}
         };
         for (const auto& pair : pairs) if (!std::strcmp(code, pair.actor)) return pair.sheath;
         return code;

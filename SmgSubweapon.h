@@ -3,12 +3,15 @@
 #include "NativeSmgMenuPolicy.h"
 #include "SamTargets.h"
 #include "SamNativeRuntime.h"
+#include "SamCombatRouting.h"
+#include "SamUltimatePolicy.h"
 #include "SamStagePolicy.h"
 #include "EncounterPolicy.h"
 #include "gui.h"
 #include "SamVisualEffects.h"
 #include "NativeGunPose.h"
 #include "GunRuntimeLog.h"
+#include "WallTraversalPolicy.h"
 #include <cObjReadManager.h>
 #include <Em0010.h>
 #include <BehaviorBalkan.h>
@@ -34,6 +37,7 @@ class SmgSubweapon
     float recoilBloom=0.0f;
     float currentSpread=0.015f;
     SmgPolicy::FireControl fire;
+    SmgPolicy::AimControl aimControl;
     SmgPolicy::SprayGesture sprayGesture;
     int poseNode=-1;
     unsigned poseTicks=0;
@@ -48,15 +52,36 @@ class SmgSubweapon
     Hw::cVec4 aimPoint;
     bool ikSolved=false;
     bool gunSummoned=false;
+    bool focusedAimActive=false;
+    bool shootingPoseHeld=false;
     unsigned spreadSeed=0x9E3779B9u;
     unsigned animatedCombo=0;
     unsigned preparedDumpCombo=0;
     bool pendingShot=false;
     bool pendingSpray=false;
+    bool pendingFocused=false;
     bool groupSpray=false;
     EntityHandle pendingTarget;
     SmgPolicy::Move pendingMove=SmgPolicy::Burst;
     bool reserved=false;
+    bool triggerReserved=false;
+    unsigned triggerMask=0,triggerOn=0,triggerTrig=0,triggerRep=0;
+    unsigned mouseOn=0,mouseTrig=0,mouseRep=0;
+    float rightTrigger=0;
+    void ReserveTrigger()
+    {
+        triggerMask=SmgPolicy::ControllerFire;
+        triggerOn=g_dbPad.m_On&triggerMask;triggerTrig=g_dbPad.m_Trig&triggerMask;triggerRep=g_dbPad.m_Rep&triggerMask;
+        g_dbPad.m_On&=~triggerMask;g_dbPad.m_Trig&=~triggerMask;g_dbPad.m_Rep&=~triggerMask;
+        rightTrigger=g_dbPad.m_RightTrigger;g_dbPad.m_RightTrigger=0;
+        mouseOn=g_Mouse.m_On&Hw::MOUSE_BTN_L;mouseTrig=g_Mouse.m_Trig&Hw::MOUSE_BTN_L;mouseRep=g_Mouse.m_Rep&Hw::MOUSE_BTN_L;
+        g_Mouse.m_On&=~Hw::MOUSE_BTN_L;g_Mouse.m_Trig&=~Hw::MOUSE_BTN_L;g_Mouse.m_Rep&=~Hw::MOUSE_BTN_L;
+        owner->m_CurrentInput.m_On&=~owner->m_ButtonLightAttack;
+        owner->m_CurrentInput.m_Trig&=~owner->m_ButtonLightAttack;
+        owner->m_CurrentInput.m_On&=~SmgPolicy::ControllerFire;
+        owner->m_CurrentInput.m_Trig&=~SmgPolicy::ControllerFire;
+        triggerReserved=true;
+    }
     unsigned mask=0,padOn=0,padTrig=0,padRep=0,keyOn=0,keyTrig=0,keyRep=0;
     static constexpr unsigned Key=1u<<('C'%32), Constraint=14;
     std::atomic<unsigned> displayRounds{SmgPolicy::Magazine},displayReload{0};
@@ -244,11 +269,13 @@ class SmgSubweapon
     {
         if(!owner || !IsEquipped()) return;
         const bool sliding = IsNinjaRunSliding(owner);
+        const bool reloading = fire.reload != 0;
+        const bool activePose = gunSummoned && Neutral() && !sliding && (!reloading || shootingPoseHeld);
         if(Entity* model=gun.getEntity();model && model->m_pBehavior)
         {
-            if(gunSummoned && Neutral() && !sliding) model->m_pBehavior->onDisp();else model->m_pBehavior->offDisp();
+            if(activePose) model->m_pBehavior->onDisp();else model->m_pBehavior->offDisp();
         }
-        if(!gunSummoned || !Neutral() || sliding)
+        if(!activePose)
         {
             if(Entity* blade=hiddenBlade.getEntity();blade && blade->m_pBehavior && bladeWasVisible)
                 blade->m_pBehavior->onDisp();
@@ -272,7 +299,6 @@ class SmgSubweapon
     {
         if (!player) return false;
         if (Trigger::GameFlags.GAME_SLIDER_NINJARUN_MODE != 0) return true;
-        if (Trigger::GameFlags.GAME_IGNORE_PARKOUR_SLIDING != 0) return true;
         if (player->m_pAnimationSlot && player->m_pAnimationSlot->m_pArray)
         {
             for (int i = 0; i < player->m_pAnimationSlot->m_Size; ++i)
@@ -293,16 +319,49 @@ class SmgSubweapon
         }
         return false;
     }
+    bool IsMeleeAction(Pl0000* player) const
+    {
+        if(!player) return false;
+        // Drop the weapon layer as soon as an attack starts, and keep it off
+        // through Sam's custom attack states and their native recovery.
+        const unsigned attacks=player->m_ButtonLightAttack|player->m_ButtonHeavyAttack;
+        const unsigned nativeAttacks=focusedAimActive?player->m_ButtonHeavyAttack:attacks;
+        if((player->m_CurrentInput.m_On|player->m_CurrentInput.m_Trig)&nativeAttacks) return true;
+        if(SamUltimatePolicy::Attack(player->m_Rno0) ||
+            (player->m_Rno0>=0x10000Fu && player->m_Rno0<=0x10001Au)) return true;
+        // Attack inputs can be released before the native combo recovery ends.
+        // Slot zero is the current body animation, so keep the gun layer out
+        // until the melee clip has actually yielded control.
+        if(player->m_pAnimationSlot && player->m_pAnimationSlot->m_pArray &&
+            player->m_pAnimationSlot->m_Size>0)
+        {
+            const char* name=player->m_pAnimationSlot->m_pArray[0].m_pAnimName;
+            if(name)
+            {
+                const size_t length=std::strlen(name);
+                for(size_t i=0;i+4<=length;++i)
+                {
+                    char code[5]={name[i],name[i+1],name[i+2],name[i+3],0};
+                    if(SamCombatRouting::IsCombatCode(code)) return true;
+                }
+            }
+        }
+        return false;
+    }
+    bool IsTraversalAction(Pl0000* player) const
+    {
+        return player && (player->m_Rno0==WallTraversalPolicy::Action ||
+            player->m_Rno0==SamUltimatePolicy::Action || IsNinjaRunning(player));
+    }
     bool IsLockOnButtonHeld() const
     {
         if (!owner) return false;
         const bool padLock = (g_dbPad.m_On & owner->m_ButtonSwitchLockOn) != 0 ||
                              (owner->m_CurrentInput.m_On & owner->m_ButtonSwitchLockOn) != 0;
         const bool keyLock = (GetAsyncKeyState('E') & 0x8000) != 0;
-        const bool camLock = g_GameCamera.m_LockonSystem.m_nLockType != 0 &&
-                             (g_GameCamera.m_LockonSystem.m_TargetEntity.getEntity() != nullptr ||
-                              g_GameCamera.m_LockonSystem.m_pTarget != nullptr);
-        return padLock || keyLock || camLock;
+        // Camera lock state can remain latched after the player releases the
+        // lock button; only live input may engage gun lock-on.
+        return padLock || keyLock;
     }
     bool Neutral() const
     {
@@ -331,8 +390,9 @@ class SmgSubweapon
         const bool padLock = ((g_dbPad.m_On & player->m_ButtonSwitchLockOn) != 0) ||
                              ((player->m_CurrentInput.m_On & player->m_ButtonSwitchLockOn) != 0);
         const bool keyLock = (GetAsyncKeyState('E') & 0x8000) != 0;
+        const bool inputHeld = padLock || keyLock;
+        if (!inputHeld) return info; // Ignore native camera's lingering lock state.
         const bool camActive = g_GameCamera.m_LockonSystem.m_nLockType != 0;
-        if (!padLock && !keyLock && !camActive) return info; // Only lock on when lock input is pressed
 
         if (camActive)
         {
@@ -401,105 +461,37 @@ class SmgSubweapon
         if(!GunAimMath::CameraPoint(D3DXVECTOR3(c.x,c.y,c.z),direction,
             D3DXVECTOR3(playerPosition.x,playerPosition.y,playerPosition.z),point)) return;
         aimPoint=Hw::cVec4(point.x,point.y,point.z,1);
+        if(focusedAimActive) return; // held aim follows the camera, without auto targeting
 
-        // Lock targets are candidates, never an exception to visibility.
-        const auto lockInfo = GetLockOnTargetInfo(owner);
-        // 2. Camera direction for visible on-screen detection
-        const auto& camTar = g_GameCamera.m_Target;
-        D3DXVECTOR3 camDir(camTar.x - c.x, camTar.y - c.y, camTar.z - c.z);
-        const float camLenSq = D3DXVec3LengthSq(&camDir);
-        if (camLenSq > 0.0001f) D3DXVec3Normalize(&camDir, &camDir);
-        else
+        // Quick taps and juggling prioritize a live native lock, otherwise
+        // the nearest live enemy. Free aiming never enters this branch.
+        Entity* best=owner->field_26F0.m_TargetHandle.getEntity();
+        if(!SamTargets::Enemy(best) || static_cast<BehaviorAppBase*>(best->m_pBehavior)->m_Hp<=0) best=nullptr;
+        float nearest=SmgPolicy::Range*SmgPolicy::Range;
+        if(!best)
         {
-            D3DXVec3Normalize(&direction, &direction);
-            camDir = direction;
-        }
-
-        // 3. Scan for live enemies visible strictly on the camera view
-        std::vector<VisibleEnemy> visible;
-        auto& list=g_EntitySystem.getEntityList();auto it=list.begin();
-        const int maxCount = (std::min)(8192, list.getSize());
-        for(int i=0;i<maxCount && it!=Hw::cFixedList<Entity*>::iterator{};++i,++it)
-        {
-            Entity* enemy=*it;
-            if(!SamTargets::Enemy(enemy)) continue;
-            auto* actor = static_cast<BehaviorAppBase*>(enemy->m_pBehavior);
-            if(!actor || actor->m_Hp<=0) continue;
-
-            auto p=enemy->getTransPos();p.y+=.8f;
-            const float dx=p.x-playerPosition.x,dy=p.y-playerPosition.y,dz=p.z-playerPosition.z;
-            if(dx*dx+dy*dy+dz*dz>SmgPolicy::Range*SmgPolicy::Range) continue;
-
-            // Strict check: must be in front of the camera (never behind screen!)
-            const float cdx = p.x - c.x, cdy = p.y - c.y, cdz = p.z - c.z;
-            const float camDot = cdx * camDir.x + cdy * camDir.y + cdz * camDir.z;
-            if (camDot <= 0.5f) continue;
-
-            const float distCamSq = cdx * cdx + cdy * cdy + cdz * cdz;
-            if (distCamSq < 0.25f) continue;
-            const float alignment = camDot / std::sqrt(distCamSq);
-
-
-            Hw::cVec4 screen;
-            if(!VisiblePoint(p,float(width),float(height),Hw::cVec4(camDir.x,camDir.y,camDir.z,0),screen)) continue;
-
-            const float sx = screen.x / float(width) - 0.5f, sy = screen.y / float(height) - 0.5f;
-            const float screenDistSq = sx * sx + sy * sy;
-            const float score = (1.0f - alignment) * 100.0f + screenDistSq * 10.0f + std::sqrt(dx * dx + dy * dy + dz * dz) * 0.1f;
-            const float playerYaw=std::atan2(p.x-playerPosition.x,p.z-playerPosition.z);
-            if(std::abs(GunAimMath::Wrap(playerYaw-owner->m_Rot.y))>1.047198f) continue;
-            visible.push_back({enemy, p, screen.x, score});
-        }
-
-        if(visible.empty()) return;
-
-        const bool lockActive = IsLockOnButtonHeld() || lockInfo.hasLock;
-        VisibleEnemy* selected = nullptr;
-        const bool wide = sprayGesture.active;
-
-        if (lockActive)
-        {
-            groupSpray = false;
-            if (!wide && lockInfo.hasLock && lockInfo.enemy)
+            auto& targets=g_EntitySystem.getEntityList();auto targetIt=targets.begin();
+            for(int i=0;i<(std::min)(8192,targets.getSize()) && targetIt!=Hw::cFixedList<Entity*>::iterator{};++i,++targetIt)
             {
-                for (auto& enemy : visible)
-                {
-                    if (enemy.entity == lockInfo.enemy)
-                    {
-                        selected = &enemy;
-                        break;
-                    }
-                }
-            }
-            if (!selected)
-            {
-                selected = &*std::min_element(visible.begin(), visible.end(),
-                    [](const auto& a, const auto& b) { return a.score < b.score; });
+                Entity* enemy=*targetIt;
+                if(!SamTargets::Enemy(enemy) || static_cast<BehaviorAppBase*>(enemy->m_pBehavior)->m_Hp<=0) continue;
+                const auto p=enemy->getTransPos();
+                const float dx=p.x-playerPosition.x,dy=p.y-playerPosition.y,dz=p.z-playerPosition.z;
+                const float distance=dx*dx+dy*dy+dz*dz;
+                if(distance<nearest) {nearest=distance;best=enemy;}
             }
         }
-        else
-        {
-            // Free aim: do NOT auto lock-on! Only spray across group if multiple enemies or wide flick.
-            groupSpray = visible.size() > 1 || wide;
-        }
+        if(best) {aimTarget=best;aimPoint=best->getTransPos();aimPoint.y+=.8f;}
+        return;
 
-        if(selected)
-        {
-            aimTarget = selected->entity;
-            aimPoint = selected->point;
-        }
     }
+
     void AimAt()
     {
+        // Keep the camera ray as the single source of truth for both the
+        // reticle and the projectile. Clamping the player-relative yaw here
+        // used to make the visible reticle disagree with the shot direction.
         AimAtUnbounded();
-        if(!owner) return;
-        const auto position=owner->m_pEntity->getTransPos();
-        const float dx=aimPoint.x-position.x,dz=aimPoint.z-position.z;
-        const float relative=GunAimMath::Wrap(std::atan2(dx,dz)-owner->m_Rot.y);
-        const float yaw=owner->m_Rot.y+(std::clamp)(relative,-1.047198f,1.047198f);
-        const float range=(std::max)(1.0f,std::hypot(dx,dz));
-        aimPoint.x=position.x+std::sin(yaw)*range;
-        aimPoint.z=position.z+std::cos(yaw)*range;
     }
     float NextSpread()
     {
@@ -517,7 +509,7 @@ class SmgSubweapon
         poseTicks=reload?SmgPolicy::Reload:raise?SmgPolicy::RaiseTicks:length;
         gunPose=true;readyPose=ready;reloadPose=reload;raisingPose=raise;
     }
-    bool Spawn(Entity* target,SmgPolicy::Move move,bool spray)
+    bool Spawn(Entity* target,SmgPolicy::Move move,bool spray,bool focused)
     {
         Entity* model=gun.getEntity();
         if(!model || !model->m_pBehavior) return false;
@@ -551,7 +543,7 @@ class SmgSubweapon
         const float distToAim=(std::max)(2.0f,std::sqrt(dx0*dx0+dy0*dy0+dz0*dz0));
         const auto lockInfo=GetLockOnTargetInfo(owner);
         const bool lockHeld=IsLockOnButtonHeld();
-        if((!lockInfo.hasLock || lockHeld) && currentSpread>0.001f)
+        if(!focused && (!lockInfo.hasLock || lockHeld) && currentSpread>0.001f)
         {
             const float angle=NextSpread()*6.2831853f;
             const float spreadMag=NextSpread()*currentSpread*distToAim;
@@ -585,14 +577,8 @@ class SmgSubweapon
                 aim.z += matrix.r[0].z * spreadX + matrix.r[1].z * spreadY;
             }
         }
-        // Free spray uses camera rays too; bound the final projectile after
-        // spread so a camera behind Raiden cannot emit backwards shots.
-        const float shotX=aim.x-origin.x,shotZ=aim.z-origin.z;
-        const float shotYaw=owner->m_Rot.y+(std::clamp)(GunAimMath::Wrap(
-            std::atan2(shotX,shotZ)-owner->m_Rot.y),-1.047198f,1.047198f);
-        const float shotRange=(std::max)(1.0f,std::hypot(shotX,shotZ));
-        aim.x=origin.x+std::sin(shotYaw)*shotRange;
-        aim.z=origin.z+std::cos(shotYaw)*shotRange;
+        // The final projectile follows the same camera ray shown by the
+        // reticle. A focused shot skips random spread so the reticle is exact.
         const float dx=aim.x-origin.x,dy=aim.y-origin.y,dz=aim.z-origin.z;
         Hw::cVec4 rot(-std::atan2(dy,std::sqrt(dx*dx+dz*dz)),std::atan2(dx,dz),0,0);
         using Trajectory=void(__thiscall*)(void*,Hw::cVec4*,Hw::cVec4*,Hw::cVec4*,float,float);
@@ -619,7 +605,7 @@ class SmgSubweapon
             emitted.field_360.getEntity(),origin.x,origin.y,origin.z,yaw);
         // Commit the native projectile independently of cosmetic effects.
         recoilBloom=(std::min)(0.08f,recoilBloom+0.015f);
-        fire.Fired();readyWindow.Fired();displayRounds=fire.rounds;displayReload=fire.reload;
+        fire.Fired();if(fire.reload) readyWindow.Cancel();else readyWindow.Fired();displayRounds=fire.rounds;displayReload=fire.reload;
         if(resources[3].registered)
         {
             GunRuntimeLog::stage="muzzle flash";
@@ -631,6 +617,8 @@ class SmgSubweapon
             }
             Hw::cVec4 aimDir(aim.x-origin.x,aim.y-origin.y,aim.z-origin.z,0);
             flashActive=Flash(&muzzleFlash,model,origin,aimDir);
+            GunRuntimeLog::Write("muzzle flash emitted=%d position=(%.3f,%.3f,%.3f) direction=(%.3f,%.3f,%.3f)",
+                int(flashActive),origin.x,origin.y,origin.z,aimDir.x,aimDir.y,aimDir.z);
         }
         return true;
     }
@@ -638,8 +626,7 @@ class SmgSubweapon
     {
         // Reserve firing only. Composite native button bindings must never
         // consume movement, sprint, jump, or melee input.
-        mask=SmgPolicy::FireInputMask(owner->m_ButtonUseSubweapon,owner->m_ButtonNinjarun,
-            owner->m_ButtonJump,owner->m_ButtonLightAttack,owner->m_ButtonHeavyAttack,owner->m_ButtonBlademode);
+        mask=SmgPolicy::ControllerAim;
         padOn=g_dbPad.m_On&mask;padTrig=g_dbPad.m_Trig&mask;padRep=g_dbPad.m_Rep&mask;
         keyOn=g_Keyboard.m_pOn[2]&Key;keyTrig=g_Keyboard.m_pTrig[2]&Key;keyRep=g_Keyboard.m_pRep[2]&Key;
         g_dbPad.m_On&=~mask;g_dbPad.m_Trig&=~mask;g_dbPad.m_Rep&=~mask;
@@ -685,6 +672,13 @@ public:
     }
     void RestoreInputs()
     {
+        if(triggerReserved)
+        {
+            g_dbPad.m_On=(g_dbPad.m_On&~triggerMask)|triggerOn;g_dbPad.m_Trig=(g_dbPad.m_Trig&~triggerMask)|triggerTrig;
+            g_dbPad.m_Rep=(g_dbPad.m_Rep&~triggerMask)|triggerRep;g_dbPad.m_RightTrigger=rightTrigger;
+            g_Mouse.m_On=(g_Mouse.m_On&~Hw::MOUSE_BTN_L)|mouseOn;g_Mouse.m_Trig=(g_Mouse.m_Trig&~Hw::MOUSE_BTN_L)|mouseTrig;
+            g_Mouse.m_Rep=(g_Mouse.m_Rep&~Hw::MOUSE_BTN_L)|mouseRep;triggerReserved=false;
+        }
         if(!reserved) return;
         g_dbPad.m_On=(g_dbPad.m_On&~mask)|padOn;g_dbPad.m_Trig=(g_dbPad.m_Trig&~mask)|padTrig;g_dbPad.m_Rep=(g_dbPad.m_Rep&~mask)|padRep;
         g_Keyboard.m_pOn[2]=(g_Keyboard.m_pOn[2]&~Key)|keyOn;g_Keyboard.m_pTrig[2]=(g_Keyboard.m_pTrig[2]&~Key)|keyTrig;
@@ -694,9 +688,11 @@ public:
     {
         RestoreInputs();
         fire.Cancel();
+        aimControl.Cancel();shootingPoseHeld=false;
         sprayGesture.Reset();
         gunSummoned=false;
         displayAim=false;displayLock=false;displaySolved=false;
+        focusedAimActive=false;
         readyWindow.Cancel();
         pendingShot=false;
         pendingTarget=EntityHandle{};
@@ -738,6 +734,7 @@ public:
         {GunRuntimeLog::selected=selected;GunRuntimeLog::Write("selected=%d build=gun-runtime-20 player=%p",int(selected),player);}
         GunRuntimeLog::stage="gun eligibility";
         pendingShot=false;pendingTarget=EntityHandle{};
+        pendingFocused=false;
         if(owner!=player) {if(owner) Forget(owner);owner=player;}
         before.clear();
         if(bulletPool.getEntity() || selected)
@@ -768,15 +765,25 @@ public:
         Reserve();
         if(Stopped()) return;
         const bool sliding = IsNinjaRunSliding(player);
-        const bool held = !sliding && (((GetAsyncKeyState('C')&0x8000)!=0) || padOn!=0);
+        // Firing stays available during Ninja Run and jumps. Slides suppress
+        // firing as well as the upper-body overlay.
+        const bool aimButton = ((GetAsyncKeyState('C')&0x8000)!=0) ||
+            SmgPolicy::ControllerAimHeld(g_dbPad.m_On|padOn);
         float flickX=g_dbPad.m_LeftStick.x,flickY=g_dbPad.m_LeftStick.y;
         const float keyX=float((GetAsyncKeyState('D')&0x8000)!=0)-float((GetAsyncKeyState('A')&0x8000)!=0);
         const float keyY=float((GetAsyncKeyState('W')&0x8000)!=0)-float((GetAsyncKeyState('S')&0x8000)!=0);
         if(keyX || keyY) {flickX=keyX;flickY=keyY;}
-        const bool wide=sprayGesture.Tick(flickX,flickY,held);
+        const bool lockHeld=IsLockOnButtonHeld();
+        const bool mouseHeld=(GetAsyncKeyState(VK_LBUTTON)&0x8000)!=0;
+        const bool trigger=mouseHeld || SmgPolicy::ControllerFireHeld(g_dbPad.m_On|padOn,g_dbPad.m_RightTrigger);
+        const bool held=aimControl.Tick(aimButton,trigger,Neutral(),sliding,lockHeld);
+        const bool focusedAim=aimControl.aiming;
+        focusedAimActive=focusedAim;
+        shootingPoseHeld=held;
+        if(focusedAim) ReserveTrigger();
+        const bool wide=sprayGesture.Tick(flickX,flickY,held) && !lockHeld && !focusedAim;
 
         recoilBloom=(std::max)(0.0f,recoilBloom-0.0025f);
-        const bool lockHeld=IsLockOnButtonHeld();
         const bool stationary=IsStationary();
         const bool ninjaRunning=IsNinjaRunning(player);
         float baseSpr=0.015f;
@@ -788,14 +795,20 @@ public:
         displaySpread=currentSpread;
 
         const auto move=lockHeld ? SmgPolicy::Launcher : (owner->isInAir()?SmgPolicy::Aerial:wide?SmgPolicy::Sweep:SmgPolicy::Burst);
-        fire.Tick(held,Neutral(),move);
+        fire.Tick(held,Neutral(),move,aimControl.tapped);
         fire.RejectUnfunded();
-        const bool firingOrReady = held || fire.queued != 0 || fire.delay != 0 || readyWindow.remaining != 0;
-        gunSummoned = Neutral() && !sliding && (firingOrReady && !fire.charge.requireRelease);
+        const bool reloading = fire.reload != 0;
+        if(reloading) readyWindow.Cancel();
+        const bool firingOrReady = !reloading && (held || fire.queued != 0 || fire.delay != 0 || readyWindow.remaining != 0);
+        const bool melee=IsMeleeAction(player);
+        const bool dropForReload=reloading && !shootingPoseHeld;
+        gunSummoned = Neutral() && !sliding && !melee && !dropForReload &&
+            ((firingOrReady || focusedAim) && !fire.charge.requireRelease);
+        if(shootingPoseHeld && Neutral() && !sliding && !melee && !fire.charge.requireRelease) gunSummoned=true;
         displayCharge=0;
         displayRounds=fire.rounds;displayReload=fire.reload;
-        readyWindow.Tick(true,Neutral());
-        if(!gunSummoned || sliding)
+        readyWindow.Tick(true,Neutral() && !reloading);
+        if(!gunSummoned || melee || dropForReload)
         {
             visualPose.Reset();
             gunPose=readyPose=raisingPose=reloadPose=false;poseTicks=0;stanceRaised=false;
@@ -816,27 +829,41 @@ public:
                 root,fire.rounds,fire.queued,fire.delay);
         }
         GunRuntimeLog::stage="gun pose and firing";
-        if(!gunSummoned || sliding) return;
+        if(!gunSummoned || melee || dropForReload) return;
         // Fire enters the ready grip immediately from any permitted action.
-        // Enemy raise/reload clips must not delay input or replace the grip.
-        visualCode=SmgPolicy::ReadyMotion;visualFrame=0;
+        // Reload removes IK and gun holding poses so native animations play cleanly.
+        visualCode=SmgPolicy::ReadyMotion;
+        visualFrame=0;
         gunPose=readyPose=true;raisingPose=reloadPose=false;poseTicks=1;
         AimAt();
         if(!fire.Ready()) return;
         pendingTarget=aimTarget;
         pendingMove=(lockHeld || fire.move==SmgPolicy::Launcher) ? SmgPolicy::Launcher :
             (owner->isInAir()?SmgPolicy::Aerial:SmgPolicy::RoundMove(fire.move,fire.ordinal));
-        pendingSpray=SmgPolicy::Spray(fire.move,wide);pendingShot=true;
+        pendingSpray=!focusedAim && SmgPolicy::Spray(fire.move,wide);pendingShot=true;
+        pendingFocused=focusedAim || lockHeld || aimControl.tapped;
     }
     void PostTick(Pl0000* player)
     {
         if(owner!=player || !player || !player->m_pEntity || Stopped()) return;
         const bool ninjaRunning=IsNinjaRunning(player);
         const bool sliding=IsNinjaRunSliding(player);
+        const bool melee=IsMeleeAction(player);
+        const bool traversal=IsTraversalAction(player);
+        const bool reloading=fire.reload!=0;
+        const bool dropForReload=reloading && !shootingPoseHeld;
         const bool airborne=player->isInAir()!=FALSE;
-        const bool overlay=!sliding && (GroundLocomotion() || ninjaRunning || airborne);
-        if(!overlay || sliding) visualPose.Reset();
-        if(IsEquipped() && gunSummoned && Neutral() && overlay && !sliding)
+        // Native melee, slides, Ninja Run and traversal animations own their
+        // full pose. The gun may still fire during eligible movement, but its
+        // ready/IK layer never writes into these animation frames.
+        const bool overlay=!sliding && !ninjaRunning && !traversal && !melee && !dropForReload &&
+            (airborne || GroundLocomotion());
+        if(!overlay || melee || sliding || ninjaRunning || traversal || dropForReload)
+        {
+            visualPose.Reset();
+            gunPose=readyPose=raisingPose=reloadPose=false;poseTicks=0;stanceRaised=false;
+        }
+        if(IsEquipped() && gunSummoned && Neutral() && overlay)
         {
             AimAt();
             visualPose.Prepare(player,GetVisualMotion(SmgPolicy::ReadyMotion),aimPoint,0.12f);
@@ -851,7 +878,7 @@ public:
             if(!stationary && !airborne) locomotionFrame+=SmgPolicy::StrideRate(moveSpeed,sprint);
         }
         const bool previouslySolved=ikSolved;ikSolved=false;
-        if(IsEquipped() && gunSummoned && Neutral() && overlay && !sliding && !reloadPose && !raisingPose)
+        if(IsEquipped() && gunSummoned && Neutral() && overlay && !reloadPose && !raisingPose)
         {
             if(Entity* model=gun.getEntity();model && model->m_pBehavior)
             {
@@ -881,7 +908,8 @@ public:
             }
         }
         DisplayGunPose();
-        displayAim=IsEquipped() && gunSummoned && Neutral() && !g_StaFlags.STA_PAUSE && !sliding;
+        displayAim=IsEquipped() && focusedAimActive && gunSummoned && Neutral() &&
+            !g_StaFlags.STA_PAUSE && !melee;
         displayLock=IsLockOnButtonHeld() && aimTarget.getEntity()!=nullptr;displaySolved=ikSolved;
 
         const int width=reinterpret_cast<int(__cdecl*)()>(shared::base+0xB98A90)();
@@ -908,7 +936,7 @@ public:
             if(react && g_pPlayerManager && g_pPlayerManager->getSubWeaponEquipped()==NativeSmgMenuPolicy::Slot &&
                 EncounterPolicy::CanThrow(player->m_Rno0,true,player->isInAir()!=FALSE,false,player->isBladeModeActive()!=FALSE))
             {
-                Spawn(aimTarget.getEntity(),pendingMove,pendingSpray || groupSpray);
+                Spawn(aimTarget.getEntity(),pendingMove,pendingSpray || groupSpray,pendingFocused);
             }
             else fire.Cancel();
         }

@@ -4,6 +4,7 @@
 #include <vector>
 #include <cstdlib>
 #include <cstdio>
+#include "SamLightComboPolicy.h"
 
 // Clone boss timing/visual/audio tracks, adapting hits to Sam's player attack
 // table. The archive remains immutable. Enemy flags and other actor-specific
@@ -27,9 +28,14 @@ namespace SamBossSequence
     inline unsigned AttackNumber(const char* code, unsigned bossNumber)
     {
         if (!code) return 12;
+        // The campaign template already uses playable Sam's attack table.
+        if(SamLightComboPolicy::ExtensionCode(code))return bossNumber;
         // Native playable Sam entries: light 4/6/8, finisher 10,
         // heavy 12, charged draw 26. Preserve telegraphs as non-hits.
-        if (!std::strcmp(code, "2200") || !std::strcmp(code, "2220")) return 4;
+        if (!std::strcmp(code, "2200")) return 4;
+        if (!std::strcmp(code, "2210")) return 6;
+        if (!std::strcmp(code, "2220")) return bossNumber == 8 ? 8 : 6;
+        if (!std::strcmp(code, "2000") || !std::strcmp(code, "2020")) return bossNumber == 14 ? 10 : 4;
         if (!std::strcmp(code, "9100") || !std::strcmp(code, "9101") || !std::strcmp(code, "9102")) return 4;
         if (!std::strcmp(code, "9108")) return 12;
         if (!std::strcmp(code, "3015") || !std::strcmp(code, "92e4")) return bossNumber == 14 ? 26 : 4;
@@ -111,9 +117,10 @@ namespace SamBossSequence
             return offset;
         };
         unsigned zero = append("0"), always = append("4294967295");
+        unsigned bossLightEffect = append("10");
         unsigned sheathFlag = append("2097152"); // flag 21 in each 32-bit bank
-        unsigned attackOffsets[27]{};
-        for (unsigned n : {4u, 10u, 12u, 26u})
+        unsigned attackOffsets[32]{};
+        for (unsigned n=1;n<32;++n)
         {
             char number[12]; std::snprintf(number, sizeof(number), "%u", n);
             attackOffsets[n] = append(number);
@@ -176,12 +183,14 @@ namespace SamBossSequence
                 unsigned ci = U16(child + 6), ca = U16(child + 4);
                 if (ci + ca >= pairs) return {};
                 bool telegraph = false;
+                bool bossEffectBank = false;
                 unsigned bossNumber = 0;
                 unsigned start = zero;
                 for (unsigned a = 1; a <= ca; ++a)
                 {
                     const uint8_t* entry = src + pairStart + (ci + a) * 4;
                     const char* name = str(U16(entry));
+                    if (!std::strcmp(name,"EffDataId")) bossEffectBank = !std::strcmp(str(U16(entry+2)),"131104");
                     if (!std::strcmp(name, "No"))
                     {
                         bossNumber = unsigned(std::strtoul(str(U16(entry + 2)), nullptr, 10));
@@ -194,6 +203,13 @@ namespace SamBossSequence
                     const char* name = str(U16(src + pairStart + (ci + a) * 4));
                     if (effect)
                     {
+                        // Stock 2210 references absent em0020 EST 11. Reuse
+                        // the preceding basic strike's installed EST 10,
+                        // preserving this stage's authored timing and transform.
+                        if (bossEffectBank && code && !std::strcmp(code,"2210") &&
+                            !std::strcmp(name,"EffNo") &&
+                            !std::strcmp(str(U16(src+pairStart+(ci+a)*4+2)),"11"))
+                            W16(out.data()+pairStart+(ci+a)*4+2,bossLightEffect);
                         // Boss layers 1/2 gate leap VFX out on the player.
                         // Preserve bank, effect, time, offsets and control type.
                         if (!std::strcmp(name,"LayerFlag"))

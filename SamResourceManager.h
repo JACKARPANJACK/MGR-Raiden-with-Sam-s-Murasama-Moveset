@@ -7,6 +7,11 @@
 #include "SamArchiveLookup.h"
 #include "SamSheathPolicy.h"
 #include "SamBossSequence.h"
+#include "SamVoiceSequence.h"
+#include "SamLightComboPolicy.h"
+#include "SamStagePolicy.h"
+#include <map>
+#include <string>
 #include <windows.h>
 #include <cstdio>
 #include <initializer_list>
@@ -39,6 +44,34 @@ private:
     unsigned m_samSelectors[7]{};
     bool m_hasSavedSelectors = false;
     std::vector<uint8_t> m_chargeRecoverySequence;
+    std::map<std::string,std::vector<uint8_t>> m_playerVoiceSequences;
+    struct LightClip { std::vector<uint8_t> motion,sequence; };
+    std::map<std::string,LightClip> m_lightClips;
+
+    SamArchiveLookup::Clip LightExtensionClip(const char* code)
+    {
+        if(!SamLightComboPolicy::ExtensionCode(code))return {};
+        auto it=m_lightClips.find(code);
+        if(it==m_lightClips.end()) {
+            char exe[MAX_PATH]{};GetModuleFileNameA(nullptr,exe,MAX_PATH);
+            char* slash=std::strrchr(exe,'\\');if(!slash)return {};*slash=0;
+            const std::string stem=std::string(exe)+"\\scripts\\SamTemplateAnims\\light_"+code;
+            auto read=[&](const char* suffix) {
+                FILE* file=nullptr;fopen_s(&file,(stem+suffix).c_str(),"rb");
+                if(!file)return std::vector<uint8_t>{};
+                std::fseek(file,0,SEEK_END);const long size=std::ftell(file);std::rewind(file);
+                if(size<=0 || size>4*1024*1024){std::fclose(file);return std::vector<uint8_t>{};}
+                std::vector<uint8_t> bytes(size);
+                const bool ok=std::fread(bytes.data(),1,bytes.size(),file)==bytes.size();std::fclose(file);
+                return ok ? bytes : std::vector<uint8_t>{};
+            };
+            LightClip clip{read(".mot"),read("_seq.bxm")};
+            if(clip.motion.size()<12 || !SamStagePolicy::Length(clip.motion.data()) ||
+                clip.sequence.size()<16 || SamBossSequence::Size(clip.sequence.data())!=clip.sequence.size())return {};
+            it=m_lightClips.emplace(code,std::move(clip)).first;
+        }
+        return {it->second.motion.data(),it->second.sequence.data(),SamArchiveLookup::Source::Playable};
+    }
 
     SamResourceManager() = default;
 
@@ -221,7 +254,7 @@ public:
         bool allowFallback = true, bool requireSequence = true)
     {
         if (!m_isLoaded) return {};
-        auto clip = SamArchiveLookup::Resolve(code, source, allowFallback, requireSequence,
+        auto clip = SamLightComboPolicy::ExtensionCode(code) ? LightExtensionClip(code) : SamArchiveLookup::Resolve(code, source, allowFallback, requireSequence,
             [this](SamArchiveLookup::Source archive, const char* name) -> void*
             {
                 return (archive == SamArchiveLookup::Source::Playable ?
@@ -237,6 +270,15 @@ public:
                         break;
                     }
             if (!m_chargeRecoverySequence.empty()) clip.sequence=m_chargeRecoverySequence.data();
+        }
+        if(clip.sequence) {
+            const std::string key=std::string(clip.source==SamArchiveLookup::Source::Playable ? "pl1400:" : "em0020:")+code;
+            auto it=m_playerVoiceSequences.find(key);
+            if(it==m_playerVoiceSequences.end()) {
+                auto copy=SamVoiceSequence::Adapt(clip.sequence,GetBossSequenceSize(clip.sequence));
+                if(!copy.empty())it=m_playerVoiceSequences.emplace(key,std::move(copy)).first;
+            }
+            if(it!=m_playerVoiceSequences.end())clip.sequence=it->second.data();
         }
         return clip;
     }
@@ -321,8 +363,18 @@ public:
         SamArchiveLookup::Source source = SamArchiveLookup::Source::Playable)
     {
         if (!m_isLoaded || !filename) return nullptr;
-        return (source == SamArchiveLookup::Source::Playable ?
+        void* data=(source == SamArchiveLookup::Source::Playable ?
             m_pl1400Fmerge : m_em0020Fmerge).getFileNameData(filename);
+        if(data && std::strstr(filename,"_seq.bxm")) {
+            const std::string key=std::string("raw:")+filename;
+            auto it=m_playerVoiceSequences.find(key);
+            if(it==m_playerVoiceSequences.end()) {
+                auto copy=SamVoiceSequence::Adapt(data,GetBossSequenceSize(data));
+                if(!copy.empty())it=m_playerVoiceSequences.emplace(key,std::move(copy)).first;
+            }
+            if(it!=m_playerVoiceSequences.end())return it->second.data();
+        }
+        return data;
     }
 
     size_t GetBossSequenceSize(void* data)

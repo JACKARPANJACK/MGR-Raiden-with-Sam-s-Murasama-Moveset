@@ -16,6 +16,8 @@ namespace gui
     struct KunaiAimView { bool active=false; unsigned frames=0,targets=0,ammo=0,recovery=0; int variant=0; };
     void GetKunaiAimView(KunaiAimView& out);
     bool IsMenuVisible();
+    void GetWallTraversalView(bool& enabled,int& mode,unsigned& ticks,float& distance,const char*& status);
+    void EnableWallTraversal(bool enabled);
     static constexpr size_t MAX_HISTORY = 32;
 
     struct HistoryEntry
