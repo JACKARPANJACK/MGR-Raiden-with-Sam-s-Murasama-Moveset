@@ -74,6 +74,8 @@ public:
     }
     void ReserveUltimate(Pl0000* player)
     {
+        if(player && SamDirectionalPolicy::NativeSprint(player->m_Rno0,
+            ((g_dbPad.m_On|player->m_CurrentInput.m_On)&(player->m_ButtonNinjarun&~0xFu))!=0))return;
         if(!inputsReserved || !SamMovesetManager::Instance().IsEnabled() || !SamUltimatePolicy::ReserveButton(
             player->m_Rno0,player->isAlive()!=FALSE,player->isInAir()!=FALSE,
             g_StaFlags.STA_QTE||g_StaFlags.STA_EVENT||g_StaFlags.STA_CODEC||g_StaFlags.STA_SOFT_EVENT||Trigger::StpFlags.STP_OBJ,
@@ -93,7 +95,7 @@ public:
         const bool prev=(GetAsyncKeyState('Q')&0x8000)!=0 || (GetAsyncKeyState(VK_OEM_4)&0x8000)!=0;
         const bool next=(GetAsyncKeyState('E')&0x8000)!=0 || (GetAsyncKeyState(VK_OEM_6)&0x8000)!=0;
         auto& sam=SamMovesetManager::Instance();
-        // G/menu toggles and weapon selection share one source of truth.
+        // Reflect pending activation and runtime deactivation in the weapon selector.
         if(Pending()<0)
         {
             if((sam.IsRequested() || sam.IsEnabled())) selected=WeaponSwitchPolicy::Murasama;

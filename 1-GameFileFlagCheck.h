@@ -72,10 +72,8 @@ public:
 			if (sheathEntity && reinterpret_cast<uintptr_t>(sheathEntity) >= 0x10000 &&
 				swordEntity && reinterpret_cast<uintptr_t>(swordEntity) >= 0x10000)
 			{
-				player->m_bSwordHidden = 1;
-				player->removeConstraint(CONSTRAINT_4);
-				const int bone = (sheathEntity->m_ObjId == static_cast<eObjID>(0x11404)) ? 1808 : ATTACH_POINT_710;
-				player->attachObject(CONSTRAINT_4, sheathEntity, swordEntity, bone, 0);
+                player->m_bSwordHidden = 1;
+                g_GameFunctionManager.ParkSword(player);
 				Flag53 = true;
 			}
 		}

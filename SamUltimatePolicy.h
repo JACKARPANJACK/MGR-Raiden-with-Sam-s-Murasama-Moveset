@@ -64,12 +64,14 @@ namespace SamUltimatePolicy
     {
         return state == 0x100000 || state == 0x100001 || state == 0x100002;
     }
+    inline bool Running(uint32_t state)
+    {return state==0x100008 || state==0x100009 || state==0x100014 || state==0x100015 || state==0x100016;}
     inline bool ReserveButton(unsigned state,bool alive,bool airborne,bool blocked,bool blade,bool subweapon)
-    { return alive && !airborne && !blocked && !blade && !subweapon && (Neutral(state)||Attack(state)||state==Action); }
+    { return alive && !airborne && !blocked && !blade && !subweapon && !Running(state) && (Neutral(state)||Attack(state)||state==Action); }
     // Never steal aerial, damage, execution, or scripted states.
-    inline bool CanStart(uint32_t state, bool alive, bool airborne, bool finished)
+    inline bool CanStart(uint32_t state, bool alive, bool airborne, bool finished,bool freshAttack=false)
     {
-        return alive && !airborne && (Neutral(state) || (Attack(state) && finished));
+        return alive && !airborne && !Running(state) && (Neutral(state) || (Attack(state) && (finished || freshAttack)));
     }
     struct Queue
     {

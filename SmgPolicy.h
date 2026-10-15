@@ -7,6 +7,7 @@
 
 namespace SmgPolicy
 {
+    constexpr unsigned Buttons(unsigned binding) {return binding&~0xFu;}
     constexpr unsigned ControllerAim=0x400u,ControllerFire=0x4000u; // LB, RT.
     constexpr bool ControllerAimHeld(unsigned buttons) {return (buttons&ControllerAim)!=0;}
     inline bool ControllerFireHeld(unsigned buttons,float trigger)

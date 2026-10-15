@@ -2,6 +2,7 @@
 #include <cstdint>
 namespace SamElectricPolicy
 {
+    constexpr float GrabRange = 10.0f;
     inline bool Ordinary(uint32_t model)
     {
         switch (model)

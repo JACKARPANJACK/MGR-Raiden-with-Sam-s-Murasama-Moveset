@@ -383,6 +383,22 @@ public:
         __except (EXCEPTION_EXECUTE_HANDLER) {}
     }
 
+    void ParkUnusedSword(Pl0000* player,bool stealthPose,bool gunPose) {
+        if(!player || !player->isAlive() || player->isBladeModeActive() || g_GameStateManager.IsRoundTripActive ||
+            g_StaFlags.STA_EVENT || g_StaFlags.STA_QTE || g_StaFlags.STA_CODEC || g_StaFlags.STA_SOFT_EVENT)return;
+        const int weapon=g_pPlayerManager?g_pPlayerManager->getCustomWeaponEquipped():0;
+        if(weapon==6)return;
+        // Dual swords (6) actively require Raiden's katana. Native sword attacks
+        // and charged draws keep their animation-driven hand attachment.
+        if(weapon==2 || weapon==3 || weapon==4 || weapon==5 || stealthPose || gunPose) {
+            if(g_GameFunctionManager.ParkSword(player)) {
+                using Refresh=void(__thiscall*)(void*);
+                if(player->m_ppConstraints)reinterpret_cast<Refresh>(shared::base+0x69CCB0)(player->m_ppConstraints);
+                auto* sheath=player->m_pSheathEntity?player->m_pSheathEntity->m_pBehavior:nullptr;
+                if(sheath && sheath->m_ppConstraints)reinterpret_cast<Refresh>(shared::base+0x69CCB0)(sheath->m_ppConstraints);
+            }
+        }
+    }
     bool IsAttachedToHip() const { return m_bAttachedToHip; }
     void SetChargePose(Pl0000* player,bool windup,bool release=false)
     { if(!player)return;TrackPlayer(player);m_chargePose=windup;m_chargeGrip=windup || release;Update(player); }

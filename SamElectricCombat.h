@@ -120,8 +120,8 @@ public:
     }
     void Grab(Pl0000* player)
     {
-        Entity* target = SamTargets::Find(player,3.5f,true);
-        if (Ordinary(target) && Distance(player->m_pEntity,target) <= 3.5f)
+        Entity* target = SamTargets::Find(player,SamElectricPolicy::GrabRange,true);
+        if (Ordinary(target) && Distance(player->m_pEntity,target) <= SamElectricPolicy::GrabRange)
         {
             Hold(Track(target), 180, true);
             auto* enemy = static_cast<BehaviorAppBase*>(target->m_pBehavior);

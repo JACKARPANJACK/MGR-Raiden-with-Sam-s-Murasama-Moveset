@@ -1,8 +1,41 @@
 #pragma once
 #include <cstring>
+#include <cmath>
 #include "SamArchiveLookup.h"
 namespace SamSheathPolicy
 {
+    // Native draw-state marker at RVA 0x795577..0x795610. Keep its
+    // hysteresis and all four hand/foot mounts, including the return to zero.
+    inline int SwordState(float x,float y,int previous) {
+        if(!std::isfinite(x)||!std::isfinite(y))return previous;
+        int state=previous;
+        if(std::fabs(x)<.01f && std::fabs(y)<.01f)state=0;
+        if(x<-.09f)state=1;
+        if(x>.09f)state=2;
+        if(y>.09f)state=3;
+        if(y<-.09f)state=4;
+        return state;
+    }
+    inline unsigned SwordSocket(unsigned sheathId) {return sheathId==0x11404u?0x710u:0x700u;}
+    template<class Actor,class Entity>
+    inline bool BindParkedSword(Actor* player,Entity* sheath,Entity* sword,unsigned socket) {
+        if(!player || !sheath || !sheath->m_pBehavior || !sword)return false;
+        auto* actor=sheath->m_pBehavior;
+        auto* mount=actor->getConstraintById(4);
+        if(!player->getConstraintById(4) && mount && mount->m_MainEntity.getEntity()==sheath &&
+            mount->m_ObjectEntityHandle.getEntity()==sword && mount->m_nBone==socket && mount->m_nRotationBone==0 &&
+            mount->m_vecOffset.x==0 && mount->m_vecOffset.y==0 && mount->m_vecOffset.z==0 &&
+            mount->m_vecRotation.x==0 && mount->m_vecRotation.y==0 && mount->m_vecRotation.z==0)return false;
+        // Exactly one owner: park on the sheath actor, never a stale player
+        // constraint whose parent entity merely happens to be the sheath.
+        player->removeConstraint(4);actor->removeConstraint(4);
+        actor->attachObject(4,sheath,sword,socket,0);
+        if(auto* c=actor->getConstraintById(4)) {
+            c->m_vecOffset=decltype(c->m_vecOffset){0,0,0,0};
+            c->m_vecRotation=decltype(c->m_vecRotation){0,0,0,0};
+        }
+        return true;
+    }
     // Native RVA 0x478EA0-0x478EBE pushes arguments right-to-left:
     // rotation 10, bone 0x701, sheath, player entity, constraint 17.
     // Attach the sheath to the player's hand; never constrain the body to it.

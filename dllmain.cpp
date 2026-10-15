@@ -8,6 +8,8 @@
 #include "SamMovesetManager.h"
 #include "WeaponSwitcher.h"
 #include "SaiPullController.h"
+#include "SaiMovesetController.h"
+#include "MonsoonKickController.h"
 #include "KunaiSubweapon.h"
 #include "NativeSmgMenu.h"
 #include "WeaponSlowMotionFix.h"
@@ -17,6 +19,11 @@
 #include <Events.h>
 #include "SamConfig.h"
 #include "WallTraversalController.h"
+#include "StealthStanceController.h"
+#include "NativeStealthDetection.h"
+#include "NativeStealthInput.h"
+#include "NativeStealthWeapons.h"
+#include "StealthCqcController.h"
 #include <intrin.h>
 #include "SamEffectPolicy.h"
 
@@ -53,17 +60,20 @@ void gui::GetDebugView(gui::DebugView& out)
     out.em0020FileCount = state.em0020FileCount;
 }
 
-void gui::ToggleMovesetFromGUI()
-{
-    if (SamPlayerIdentity::Eligible(g_Scene.m_pPlayer))
-        SamMovesetManager::Instance().Toggle(g_Scene.m_pPlayer);
-}
-
 int gui::SelectedWeapon() { return WeaponSwitcher::Get().Selected(); }
 void gui::GetWallTraversalView(bool& enabled,int& mode,unsigned& ticks,float& distance,const char*& status) {
     auto& wall=WallTraversalController::Get();enabled=wall.Enabled();wall.View(mode,ticks,distance);status=wall.Status();
 }
 void gui::EnableWallTraversal(bool enabled) {WallTraversalController::Get().Enable(enabled);}
+const char* gui::CqcStatus() {return StealthCqcController::Get().Status();}
+const char* gui::StanceStatus() {if(!NativeStealthInput::installed && StealthStanceController::Get().SelectedStance()!=StealthStancePolicy::Stance::Standing)return "Low stance: native jump filter unavailable";return StealthStanceController::Get().Status();}
+const char* gui::StealthDetectionStatus() {
+    if(!NativeStealthDetection::installed)return "Native perception hook unavailable";
+    const auto stance=StealthStanceController::Get().DetectionStance();
+    if(stance==StealthStancePolicy::Stance::Prone)return "Prone: patrol perception range reduced to 25%";
+    if(stance==StealthStancePolicy::Stance::Crouch)return "Crouch: patrol perception range reduced to 45%";
+    return "Native detection: standing, combat action, menu or recent noise";
+}
 const char* gui::DualBladeStatus() { return DualBladeWeapon::Get().Status(); }
 int gui::PendingWeapon() { return WeaponSwitcher::Get().Pending(); }
 void gui::SelectWeapon(int index) { if (SamPlayerIdentity::Eligible(g_Scene.m_pPlayer)) WeaponSwitcher::Get().Select(index); }
@@ -147,6 +157,8 @@ bool gui::PlayTestAnimation(const char* code, char* outDetails, size_t outDetail
 }
 
 static void(__cdecl* g_origTickGame)() = nullptr;
+static void SampleSamCombatInputs(Pl0000* player)
+{SamMovesetManager::Instance().SampleCombatInputs(player,true);}
 using PlayerFactory = Pl0000*(__cdecl*)(void*);
 static PlayerFactory oPlayerFactory = nullptr;
 static Pl0000* __cdecl CreateExtendedPlayer(void* heap)
@@ -162,7 +174,12 @@ static void __fastcall ShutdownExtendedPlayer(Pl0000* player, void*)
     const bool wasCurrentPlayer = !g_Scene.m_pPlayer || g_Scene.m_pPlayer == player;
     WeaponSwitcher::Get().Forget(player);
     SaiPullController::Get().Forget(player);
+    MonsoonKickController::Get().Forget(player);
+    SaiMovesetController::Get().Forget(player);
     WallTraversalController::Get().Forget(player);
+    KunaiSubweapon::GetSmg().RestoreVisualPose();
+    StealthCqcController::Get().Forget(player);
+    StealthStanceController::Get().Forget(player);
     KunaiSubweapon::Get().Forget(player);
     SamNativeRuntime::Get().BeforeShutdown(player);
     SamMovesetManager::Instance().ForgetPlayer(player);
@@ -198,7 +215,7 @@ static Animation_RequestSequence_t oAnimation_RequestSequence = nullptr;
 
 struct PlayerAnimationRequest : SamCombatRouting::RequestClip
 {
-    enum class Owner : unsigned char { None, SamMoveset, DualBlades, Gun };
+    enum class Owner : unsigned char { None, SamMoveset, DualBlades, Gun, MonsoonKick, Cqc };
     Behavior* actor = nullptr;
     int mapId = -1;
     Owner owner = Owner::None;
@@ -238,6 +255,8 @@ static bool IsAnimationRequestActive(const PlayerAnimationRequest* request)
     case PlayerAnimationRequest::Owner::SamMoveset: return IsMovesetPlayer(request->actor);
     case PlayerAnimationRequest::Owner::DualBlades: return IsDualBladePlayer(request->actor);
     case PlayerAnimationRequest::Owner::Gun: return IsGunPlayer(request->actor);
+    case PlayerAnimationRequest::Owner::MonsoonKick: return MonsoonKickController::Get().Active(request->actor);
+    case PlayerAnimationRequest::Owner::Cqc: return StealthCqcController::Get().Active(request->actor);
     default: return false;
     }
 }
@@ -278,7 +297,10 @@ static void __fastcall Custom_Animation_RequestSequence(Animation* animation, vo
         using AttachSequence = int(__thiscall*)(void*, void*, const char*, int);
         const int result = reinterpret_cast<AttachSequence>(shared::base + 0xA3FA90)(
             reinterpret_cast<char*>(animation) + 0xF4, request->clip.sequence, name, node);
-        if (result != -1) SamMovesetManager::Instance().RecordSequenceReplacement(request->samCode);
+        if (result != -1) {
+            SamMovesetManager::Instance().RecordSequenceReplacement(request->samCode);
+            if(request->owner==PlayerAnimationRequest::Owner::Cqc)StealthCqcController::Get().SequenceSupplied();
+        }
         return;
     }
     if (oAnimation_RequestSequence) oAnimation_RequestSequence(animation, name, node);
@@ -301,6 +323,7 @@ static void* __fastcall Custom_Animation_FindMotion(Animation* animation, void*,
                 request->clip.source == SamArchiveLookup::Source::Playable ? "pl1400" : "em0020",
                 true, request->clip.motion?"Native Sam motion and sequence":"DLC sequence with native shared execution motion");
         request->motionSupplied = true;
+        if(request->owner==PlayerAnimationRequest::Owner::Cqc)StealthCqcController::Get().MotionSupplied();
         return motion;
     }
     return oAnimation_FindMotion ? oAnimation_FindMotion(animation, name) : nullptr;
@@ -315,6 +338,7 @@ static void* __fastcall Custom_Behavior_GetSequenceFile(Behavior* actor, void*, 
         if (void* sequence = request->clip.sequence)
         {
             SamMovesetManager::Instance().RecordSequenceReplacement(request->code);
+            if(request->owner==PlayerAnimationRequest::Owner::Cqc)StealthCqcController::Get().SequenceSupplied();
             return sequence;
         }
     return oBehavior_GetSequenceFile ? oBehavior_GetSequenceFile(actor, name) : nullptr;
@@ -357,8 +381,21 @@ static int __fastcall Custom_Behavior_RequestAnimationByName(Behavior* pThis, vo
     PlayerAnimationRequest request{};
     const bool dual = IsDualBladePlayer(pThis);
     const bool gun = IsGunPlayer(pThis);
-    request.actor = (active || dual || gun) ? pThis : nullptr;
+    const bool kick = MonsoonKickController::Get().Active(pThis) && anim && !std::strcmp(anim,MonsoonKickPolicy::Code);
+    const auto cqcClip=StealthCqcController::Get().RequestedClip(pThis,anim);
+    const bool cqc=cqcClip.motion && cqcClip.sequence;
+    request.actor = (active || dual || gun || kick || cqc) ? pThis : nullptr;
     request.mapId = s_animationMapId;
+    if(kick) {
+        request.owner=PlayerAnimationRequest::Owner::MonsoonKick;
+        request.clip=MonsoonKickController::Get().Clip();
+        std::memcpy(request.code,MonsoonKickPolicy::Code,4);
+        std::memcpy(request.samCode,MonsoonKickPolicy::Code,4);
+    }
+    if(cqc) {
+        request.owner=PlayerAnimationRequest::Owner::Cqc;request.clip=cqcClip;
+        std::memcpy(request.code,anim,4);std::memcpy(request.samCode,anim,4);
+    }
     if (dual) {
         request.owner = PlayerAnimationRequest::Owner::DualBlades;
         const bool hasOtherCustomWeapon = (g_pPlayerManager && g_pPlayerManager->getCustomWeaponEquipped() != 0) ||
@@ -421,7 +458,7 @@ static int __fastcall Custom_Behavior_RequestAnimationByName(Behavior* pThis, vo
         }
     }
     PlayerAnimationRequest* previousRequest = s_animationRequest;
-    s_animationRequest = (active || dual || gun) ? &request : nullptr;
+    s_animationRequest = (active || dual || gun || kick || cqc) ? &request : nullptr;
     if (active)
         SamMovesetManager::Instance().TraceRequest(anim);
     int result = 0;
@@ -445,8 +482,15 @@ static int __fastcall Custom_Behavior_RequestAnimationByName(Behavior* pThis, vo
 static void __fastcall Custom_Pl0000_HandleActions(Pl0000* pThis, void* edx)
 {
     const bool raiden = pThis == g_Scene.m_pPlayer && SamPlayerIdentity::Eligible(pThis);
+    if(raiden)StealthStanceController::Get().FilterNativeInput(pThis);
     if(raiden&&WallTraversalController::Get().HandleAction(pThis))return;
-    if(raiden) SaiPullController::Get().ApplyAttackInput(pThis);
+    if(raiden&&StealthCqcController::Get().HandleAction(pThis))return;
+    if(raiden&&StealthStanceController::Get().HandleAction(pThis))return;
+    if(raiden&&MonsoonKickController::Get().HandleAction(pThis))return;
+    if(raiden) {
+        SaiMovesetController::Get().ApplyAttackInput(pThis);
+        SaiPullController::Get().ApplyAttackInput(pThis);
+    }
     if (raiden)
         SamMovesetManager::Instance().RecordActionHandler("raiden");
 
@@ -463,7 +507,7 @@ static void __fastcall Custom_Pl0000_HandleActions(Pl0000* pThis, void* edx)
 }
 
 // ============================================================================
-// TickGame hook - runs toggle + maintenance every frame
+// TickGame hook - runs weapon selection + maintenance every frame
 // ============================================================================
 static void __cdecl CustomTickGame()
 {
@@ -476,6 +520,9 @@ static void __cdecl CustomTickGame()
             player->m_pEntity && reinterpret_cast<uintptr_t>(player->m_pEntity) >= 0x10000 &&
             SamPlayerIdentity::Eligible(player))
         {
+            KunaiSubweapon::GetSmg().RestoreVisualPose();
+            StealthStanceController::Get().BeforeTick(player);
+            StealthCqcController::Get().BeforeTick(player);
             SamMovesetManager::Instance().UpdateSceneSafety(player);
             SamMovesetManager::Instance().UpdateGroundSubweapon(player);
             WallTraversalController::Get().Tick(player,SamNativeRuntime::Get().Active(player),
@@ -483,16 +530,20 @@ static void __cdecl CustomTickGame()
             WeaponSwitcher::Get().Tick(player);
             DualBladeWeapon::Get().Tick(player);
             SaiPullController::Get().Tick(player);
+            MonsoonKickController::Get().BeforeTick(player);
             KunaiSubweapon::Get().Tick(player);
             SamMovesetManager::Instance().OnTick(player);
             WeaponSwitcher::Get().ReserveUltimate(player);
         }
         else {
+            StealthCqcController::Get().BeforeTick(nullptr);
+            StealthStanceController::Get().BeforeTick(nullptr);
             // Restore prior Raiden owners without passing the new character into restoration.
             SamMovesetManager::Instance().ResetForNativeDlc();
             WeaponSwitcher::Get().Tick(nullptr);
             DualBladeWeapon::Get().Tick(nullptr);
             SaiPullController::Get().Tick(nullptr);
+            MonsoonKickController::Get().BeforeTick(nullptr);
             KunaiSubweapon::Get().Tick(nullptr);
             NativeKnifeInventory::raidenScene = false;
             WallTraversalController::Get().Tick(nullptr,false,false);
@@ -504,7 +555,7 @@ static void __cdecl CustomTickGame()
     {
         if (g_origTickGame) g_origTickGame();
     }
-    __finally { KunaiSubweapon::Get().RestoreInputs(); WeaponSwitcher::Get().RestoreInputs(); }
+    __finally { StealthCqcController::Get().RestoreInputs(); StealthStanceController::Get().RestoreInputs(); SamMovesetManager::Instance().RestoreCombatInputs(); KunaiSubweapon::Get().RestoreInputs(); WeaponSwitcher::Get().RestoreInputs(); }
     __try
     {
         auto* player = g_Scene.m_pPlayer;
@@ -512,8 +563,13 @@ static void __cdecl CustomTickGame()
             SamMovesetManager::Instance().PostTick(player);
             KunaiSubweapon::Get().PostTick(player);
             SaiPullController::Get().PostTick(player);
+            MonsoonKickController::Get().PostTick(player);
             DualBladeWeapon::Get().PostTick(player);
             WallTraversalController::Get().PostTick(player);
+            StealthStanceController::Get().PostTick(player);
+            const bool low=StealthStanceController::Get().SelectedStance()!=StealthStancePolicy::Stance::Standing;
+            const bool lowAction=StealthStancePolicy::Locomotion(player->m_Rno0) || player->m_Rno0==StealthMotionPolicy::Action || player->m_Rno0==StealthCqcPolicy::Action || (player->m_Rno0>=0x38 && player->m_Rno0<=0x3B) || player->m_Rno0==0x3D;
+            SheathController::Instance().ParkUnusedSword(player,low&&lowAction,KunaiSubweapon::GetSmg().UsesReadyPose());
         }
     }
     __except (GunRuntimeLog::Exception(GetExceptionInformation(),"post-tick")) {}
@@ -526,6 +582,11 @@ static void __cdecl CustomTickGame()
 static void InitHooks()
 {
     SamConfig::LoadConfig();
+    GunRuntimeLog::Write("[Stealth] build=unarmed-cqc-eight-hit-chain-7 native-weapon-aim-2");
+    NativeStealthDetection::Install();
+    NativeStealthInput::Install();
+    NativeStealthWeapons::Install();
+    SmgSubweapon::lowPoseCallback=[](Pl0000* p){return StealthStanceController::Get().ApplyLowGunPose(p);};
     WeaponSlowMotionFix::Install();
     DualBladeRuntime::Install();
     static SafeHook::Hook knifeDefinition((void*)(shared::base+0x54DFD0),
@@ -599,6 +660,8 @@ static void InitHooks()
         (void*)Custom_CreatePlayerEffect, true, (void**)&oCreatePlayerEffect);
     static SafeHook::Hook attackVoice((void*)(shared::base+0xA5E0C0),
         (void*)Custom_PlayActorSound,true,(void**)&oPlayActorSound);
+    SamNativeRuntime::SetCombatInputCallback(&SampleSamCombatInputs);
+    SamNativeRuntime::SetMovementActionCallback([](Pl0000* player) {StealthStanceController::Get().FilterNativeInput(player);return StealthCqcController::Get().HandleAction(player)||StealthStanceController::Get().HandleAction(player);});
 }
 
 BOOL APIENTRY DllMain(HMODULE hModule, DWORD ul_reason_for_call, LPVOID lpReserved)

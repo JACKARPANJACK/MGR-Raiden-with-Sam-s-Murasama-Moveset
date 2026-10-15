@@ -38,8 +38,12 @@ class SamNativeRuntime
     std::unordered_map<Pl0000*, std::unique_ptr<Record>> records;
     AnimationMap* samMap = nullptr;
     bool allocationReady = false;
+    inline static void (*combatInputCallback)(Pl0000*)=nullptr;
+    inline static bool (*movementActionCallback)(Pl0000*)=nullptr;
     static void __fastcall CombatAction(Pl0000* player, void*)
     {
+        if(Get().Active(player) && movementActionCallback && movementActionCallback(player))return;
+        if(Get().Active(player) && combatInputCallback)combatInputCallback(player);
         if(Get().Active(player)&&WallTraversalController::Get().HandleAction(player))return;
         if(Get().Active(player) && player->m_Rno0==SamTemplateExecutionPolicy::Action) {
             reinterpret_cast<void(__thiscall*)(Behavior*,float,float)>(shared::base+0x6C80A0)(player,1,1);
@@ -161,6 +165,8 @@ class SamNativeRuntime
     }
 
 public:
+    static void SetCombatInputCallback(void (*callback)(Pl0000*)) {combatInputCallback=callback;}
+    static void SetMovementActionCallback(bool (*callback)(Pl0000*)) {movementActionCallback=callback;}
     static SamNativeRuntime& Get() { static SamNativeRuntime runtime; return runtime; }
 
     // Run before the player factory can allocate anything. Validate both

@@ -1,5 +1,6 @@
 #pragma once
 #include "1-GlobleVarious.h"
+#include "SamSheathPolicy.h"
 
 class GameFunctionManager
 {
@@ -172,67 +173,39 @@ public:
 		}
 	}
 
-	void UpdateSwordConstraints(Pl0000* player)
-	{
-		if (!player || !player->field_13F8 || g_GameStateManager.IsRoundTripActive)
-			return;
-
-		Entity* swordEntity = player->m_SwordHandle.getEntity();
-		if (!swordEntity)
-		{
-			player->field_13F8 = 1;
-			return;
-		}
-
-		Entity* constraintsEntity = player->getConstraintsEntity(3);
-		if (!constraintsEntity)
-			return;
-
-		cParts* handBone = player->getPartsPtrNo(0x720u);
-		if (!handBone)
-			return;
-
-		constexpr float epsilon = 0.0099999998f;
-		const float xPos = handBone->m_TransPos.x;
-		int handAttachState = player->field_13F4;
-
-		if (xPos <= -epsilon && fabs(xPos) < epsilon && fabs(handBone->m_TransPos.y) < epsilon)
-			handAttachState = 0;
-
-		if (xPos < -0.089999996f)
-			handAttachState = 1;
-
-		if (handAttachState != 0)
-		{
-			if (constraintsEntity->m_pBehavior)
-				constraintsEntity->m_pBehavior->removeConstraint(4);
-
-			if (player->field_13F4)
-				player->removeConstraint(4);
-
-			player->field_13F4 = handAttachState;
-
-			switch (handAttachState)
-			{
-			case 0:
-				if (constraintsEntity->m_pBehavior)
-					constraintsEntity->m_pBehavior->attachObject(4, constraintsEntity, swordEntity, 1808, 0);
-				break;
-			case 1:
-				player->attachObject(4, player->m_pEntity, swordEntity, 1792, 0);
-				break;
-			}
-
-			if (swordEntity->m_pBehavior)
-			{
-				Pl0012* swordInstance = reinterpret_cast<Pl0012*>(swordEntity->m_pBehavior);
-				if (handAttachState >= 1 && handAttachState <= 3)
-					((char* (__thiscall*)(int))(shared::base + 0x811BE0))(reinterpret_cast<int>(swordInstance));
-				else
-					((char* (__thiscall*)(int))(shared::base + 0x811AC0))(reinterpret_cast<int>(swordInstance));
-			}
-		}
-	}
+    bool ParkSword(Pl0000* player) {
+        if(!player || g_GameStateManager.IsRoundTripActive)return false;
+        Entity* sword=player->m_SwordHandle.getEntity();
+        Entity* sheath=player->m_pSheathEntity;
+        if(!sword || !sword->m_pBehavior || !sheath || !sheath->m_pBehavior)return false;
+        const unsigned socket=SamSheathPolicy::SwordSocket(unsigned(sheath->m_ObjId));
+        if(!sheath->m_pBehavior->getPartsPtr(socket))return false;
+        const bool changed=SamSheathPolicy::BindParkedSword(player,sheath,sword,socket);
+        const bool wasDrawn=player->field_13F4!=0;
+        player->field_13F4=0;
+        if(changed || wasDrawn)
+            reinterpret_cast<void(__thiscall*)(Behavior*)>(shared::base+0x811AC0)(sword->m_pBehavior);
+        return true;
+    }
+    void UpdateSwordConstraints(Pl0000* player) {
+        if(!player || !player->field_13F8 || g_GameStateManager.IsRoundTripActive)return;
+        Entity* sword=player->m_SwordHandle.getEntity();
+        Entity* sheath=player->getConstraintsEntity(3);
+        auto* marker=player->getPartsPtrNo(0x720u);
+        if(!sword || !sword->m_pBehavior || !sheath || !sheath->m_pBehavior || !marker)return;
+        const int state=SamSheathPolicy::SwordState(marker->m_TransPos.x,marker->m_TransPos.y,player->field_13F4);
+        if(state==0){ParkSword(player);return;}
+        if(state<1 || state>4 || state==player->field_13F4)return;
+        const unsigned bone=0x6FFu+unsigned(state);
+        if(!player->getPartsPtr(bone))return;
+        sheath->m_pBehavior->removeConstraint(4);player->removeConstraint(4);
+        player->attachObject(4,player->m_pEntity,sword,bone,0);
+        if(auto* c=player->getConstraintById(4)) {
+            c->m_vecOffset=Hw::cVec4(0,0,0,0);c->m_vecRotation=Hw::cVec4(0,0,0,0);
+        }
+        player->field_13F4=state;
+        reinterpret_cast<void(__thiscall*)(Behavior*)>(shared::base+0x811BE0)(sword->m_pBehavior);
+    }
 
 	void PlayAnimationWithSpeed(Behavior* behavior, float speed1, float speed2)
 	{

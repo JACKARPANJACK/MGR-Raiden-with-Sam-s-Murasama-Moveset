@@ -76,8 +76,8 @@ class SmgSubweapon
         rightTrigger=g_dbPad.m_RightTrigger;g_dbPad.m_RightTrigger=0;
         mouseOn=g_Mouse.m_On&Hw::MOUSE_BTN_L;mouseTrig=g_Mouse.m_Trig&Hw::MOUSE_BTN_L;mouseRep=g_Mouse.m_Rep&Hw::MOUSE_BTN_L;
         g_Mouse.m_On&=~Hw::MOUSE_BTN_L;g_Mouse.m_Trig&=~Hw::MOUSE_BTN_L;g_Mouse.m_Rep&=~Hw::MOUSE_BTN_L;
-        owner->m_CurrentInput.m_On&=~owner->m_ButtonLightAttack;
-        owner->m_CurrentInput.m_Trig&=~owner->m_ButtonLightAttack;
+        owner->m_CurrentInput.m_On&=~SmgPolicy::Buttons(owner->m_ButtonLightAttack);
+        owner->m_CurrentInput.m_Trig&=~SmgPolicy::Buttons(owner->m_ButtonLightAttack);
         owner->m_CurrentInput.m_On&=~SmgPolicy::ControllerFire;
         owner->m_CurrentInput.m_Trig&=~SmgPolicy::ControllerFire;
         triggerReserved=true;
@@ -293,7 +293,7 @@ class SmgSubweapon
     {
         if (!player) return false;
         return (Trigger::StaFlags.STA_NINJARUN != 0) ||
-               ((player->m_CurrentInput.m_On & player->m_ButtonNinjarun) != 0 && !player->isInAir());
+               ((player->m_CurrentInput.m_On & SmgPolicy::Buttons(player->m_ButtonNinjarun)) != 0 && !player->isInAir());
     }
     bool IsNinjaRunSliding(Pl0000* player) const
     {
@@ -324,8 +324,8 @@ class SmgSubweapon
         if(!player) return false;
         // Drop the weapon layer as soon as an attack starts, and keep it off
         // through Sam's custom attack states and their native recovery.
-        const unsigned attacks=player->m_ButtonLightAttack|player->m_ButtonHeavyAttack;
-        const unsigned nativeAttacks=focusedAimActive?player->m_ButtonHeavyAttack:attacks;
+        const unsigned attacks=SmgPolicy::Buttons(player->m_ButtonLightAttack|player->m_ButtonHeavyAttack);
+        const unsigned nativeAttacks=focusedAimActive?SmgPolicy::Buttons(player->m_ButtonHeavyAttack):attacks;
         if((player->m_CurrentInput.m_On|player->m_CurrentInput.m_Trig)&nativeAttacks) return true;
         if(SamUltimatePolicy::Attack(player->m_Rno0) ||
             (player->m_Rno0>=0x10000Fu && player->m_Rno0<=0x10001Au)) return true;
@@ -356,8 +356,8 @@ class SmgSubweapon
     bool IsLockOnButtonHeld() const
     {
         if (!owner) return false;
-        const bool padLock = (g_dbPad.m_On & owner->m_ButtonSwitchLockOn) != 0 ||
-                             (owner->m_CurrentInput.m_On & owner->m_ButtonSwitchLockOn) != 0;
+        const bool padLock = (g_dbPad.m_On & SmgPolicy::Buttons(owner->m_ButtonSwitchLockOn)) != 0 ||
+                             (owner->m_CurrentInput.m_On & SmgPolicy::Buttons(owner->m_ButtonSwitchLockOn)) != 0;
         const bool keyLock = (GetAsyncKeyState('E') & 0x8000) != 0;
         // Camera lock state can remain latched after the player releases the
         // lock button; only live input may engage gun lock-on.
@@ -372,8 +372,8 @@ class SmgSubweapon
     }
     bool GroundLocomotion() const
     {
-        const unsigned interrupt=owner->m_ButtonLightAttack|owner->m_ButtonHeavyAttack;
-        return locomotionCode && !owner->isInAir() && (owner->m_Rno0<=4 || owner->m_Rno0==0x100000) &&
+        const unsigned interrupt=SmgPolicy::Buttons(owner->m_ButtonLightAttack|owner->m_ButtonHeavyAttack);
+        return locomotionCode && !owner->isInAir() && (owner->m_Rno0<=4 || (owner->m_Rno0>=0x100000 && owner->m_Rno0<=0x100002)) &&
             !(owner->m_CurrentInput.m_On&interrupt);
     }
     struct LockTargetInfo
@@ -387,8 +387,8 @@ class SmgSubweapon
     {
         LockTargetInfo info{};
         if (!player) return info;
-        const bool padLock = ((g_dbPad.m_On & player->m_ButtonSwitchLockOn) != 0) ||
-                             ((player->m_CurrentInput.m_On & player->m_ButtonSwitchLockOn) != 0);
+        const bool padLock = ((g_dbPad.m_On & SmgPolicy::Buttons(player->m_ButtonSwitchLockOn)) != 0) ||
+                             ((player->m_CurrentInput.m_On & SmgPolicy::Buttons(player->m_ButtonSwitchLockOn)) != 0);
         const bool keyLock = (GetAsyncKeyState('E') & 0x8000) != 0;
         const bool inputHeld = padLock || keyLock;
         if (!inputHeld) return info; // Ignore native camera's lingering lock state.
@@ -843,6 +843,9 @@ public:
         pendingSpray=!focusedAim && SmgPolicy::Spray(fire.move,wide);pendingShot=true;
         pendingFocused=focusedAim || lockHeld || aimControl.tapped;
     }
+    inline static bool(*lowPoseCallback)(Pl0000*)=nullptr;
+    bool UsesReadyPose() const {return IsEquipped() && gunSummoned && !reloadPose && !raisingPose;}
+    void RestoreVisualPose() {visualPose.BeginFrame();}
     void PostTick(Pl0000* player)
     {
         if(owner!=player || !player || !player->m_pEntity || Stopped()) return;
@@ -863,18 +866,19 @@ public:
             visualPose.Reset();
             gunPose=readyPose=raisingPose=reloadPose=false;poseTicks=0;stanceRaised=false;
         }
+        const bool low=IsEquipped() && gunSummoned && Neutral() && overlay && lowPoseCallback && lowPoseCallback(player);
         if(IsEquipped() && gunSummoned && Neutral() && overlay)
         {
             AimAt();
             visualPose.Prepare(player,GetVisualMotion(SmgPolicy::ReadyMotion),aimPoint,0.12f);
             const bool stationary=IsStationary();
             const float moveSpeed=std::hypot(player->m_TransSpeed.x,player->m_TransSpeed.z);
-            const bool sprint=(player->m_CurrentInput.m_On & player->m_ButtonNinjarun)!=0 || moveSpeed>.10f;
+            const bool sprint=(player->m_CurrentInput.m_On & SmgPolicy::Buttons(player->m_ButtonNinjarun))!=0 || moveSpeed>.10f;
             // Keep the native pelvis and legs even at zero speed: an idle
             // override can freeze the root on the first frame of movement.
             // A stable two-handed ready sample avoids replaying donor scan,
             // reload and raise motion on every burst or at loop boundaries.
-            visualPose.Apply(player,GetVisualMotion(SmgPolicy::ReadyMotion),0,true);
+            if(!low)visualPose.Apply(player,GetVisualMotion(SmgPolicy::ReadyMotion),0,true);
             if(!stationary && !airborne) locomotionFrame+=SmgPolicy::StrideRate(moveSpeed,sprint);
         }
         const bool previouslySolved=ikSolved;ikSolved=false;

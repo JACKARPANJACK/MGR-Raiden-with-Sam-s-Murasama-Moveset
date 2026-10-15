@@ -1,3 +1,37 @@
+## Runtime input repair — October 14, 2026
+
+Commands are sampled once per game tick during Sam's native combat dispatch,
+with a post-tick fallback for states that bypass that dispatch. Attack bindings
+use actual button bits rather than low directional modifier bits. Native input
+and pad state supply pressed/held buttons, including rising edges when the
+native trigger has already been consumed.
+
+While Ninja Run is held or Sam is in a native running/charged-run state, only
+the native Run + Light and Run + Heavy attacks handle attack inputs. Added
+directional specials, the light extension, F finishers and X requests are
+blocked, and pending custom requests are discarded. Sprint is
+temporarily reserved while a custom sequence plays, then restored, so holding
+Run cannot replace the attack with locomotion. Jump, damage, scripted and
+execution states remain excluded. A command entered during a native attack
+can wait up to 360 active ticks for recovery; conflicts and interruptions clear
+it. A fresh attack transition from idle/walk/run may hand off immediately.
+
+The base finisher is identified from the actual replaced sequence code, rather
+than a potentially stale animation-slot name. Press or hold neutral Light at
+`2003` to queue the template `9000-9003` extension. Holding Light during an
+extension stage also queues its next stage. Heavy/dodge/direction changes clear
+the continuation. Each stage still waits for actual motion completion.
+
+Boss charge windups wait while Heavy remains held, for at most 90 active ticks.
+Release Heavy after the windup to strike sooner, or keep holding for the full
+charge release. Releasing early still lets the telegraph finish before striking.
+Native DLC Sam charging remains owned by its native handler. INPUT records in
+the debug log now report action, prior action, sequence and button state.
+
+Validation covers consumed-trigger recovery, binding modifiers, held/chord
+inputs, sprint/fresh-attack gates, bounded charges, the real INI loader and all
+36 catalog stages. Live gameplay remains unverified.
+
 Current implementation: see [RUNTIME_REPAIR.md](RUNTIME_REPAIR.md). The runtime
 repair supersedes the damage, grab, particle, charge-context and timing details
 below; the directional control table remains valid.
@@ -79,7 +113,8 @@ it does not invoke the grenade's native EMP status. Bosses, detached parts,
 shared slow-rate units, scripted slows and QTEs are excluded. Only the selected
 target is monitored. Misses and damage from other actors cannot roll a proc.
 
-Back/right Flick + Light grabs now hold a nearby ordinary cyborg for up to 30
+Grabs can select a living ordinary cyborg within 10 metres. Back/right Flick +
+Light grabs now hold the selected cyborg for up to 30
 ticks and bring it to the grip position. Holds release on interruption, Blade
 Mode, QTE, death and toggle-off; the imported sequence supplies smash damage.
 These are short physical holds rather than boss-specific paired QTE animations.

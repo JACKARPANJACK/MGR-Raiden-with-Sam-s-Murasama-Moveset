@@ -1,6 +1,6 @@
 # Raiden with Sam's Murasama Moveset
 
-Win32 ASI plugin for Metal Gear Rising: Revengeance. G enables the native Sam DLC
+Win32 ASI plugin for Metal Gear Rising: Revengeance. Selecting Murasama in the weapon selector enables the native Sam DLC
 combat controller on Raiden, including charge/Iai, Blade Mode and Datsu nodes.
 Non-2xxx DLC animations now route to Sam's motion and sequence assets, including
 finishers and Zandatsu. Seven execution clips intentionally use shared native
@@ -12,6 +12,33 @@ Full controls and move inputs: [Sam movelist](SAM_MOVELIST.md).
 
 ## Controls
 
+- **Press G / R3**: cycle Standing → Crouch → Prone → Standing. Crouch and prone
+  use retargeted MGSV idle/walk clips and slower ground movement.
+  Stealth remains active while crouch walking and crawling: ordinary cyborg
+  patrol perception ranges drop to 45% and 25%, respectively. Close proximity
+  and existing combat alerts remain effective. Attacks, gunfire and sprinting
+  expose the player for two seconds; bosses and other sensors retain native detection.
+  **Jump while crouched:** dolphin dive toward the left-stick/WASD direction,
+  or forward with no direction held. **Jump + left/right while prone:**
+  tactical roll. Both finish prone so crawling can continue. Native collision
+  stays enabled; low-obstacle clearance and cover attachment remain native.
+  With Unarmed selected, neutral Light/Heavy keeps regular attacks.
+  **Forward + Light** starts MGSV CQC; continuing Light during the fourth native
+  punch appends its four-hit chain, making eight hits with continued Light
+  presses. Imported hits chain or release control at recovery, without holding
+  through their idle tails. **Forward + Heavy** grabs.
+  During a grab, **direction + Light** throws, **Back + Heavy** uses the knife
+  motion, and **neutral Heavy** releases. **F / controller B** attempts a rear
+  stealth takedown. Prone CQC rises to a low grab. Ordinary jumps are blocked
+  in crouch/prone; the dive/roll shortcuts remain available.
+  CQC uses paired native MOT/BXM playback, fist collisions, attack/recovery flags
+  and electric impact effects. These are experimental MGSV attacker clips with MGR victim reactions;
+  paired victim clips and a visible knife prop remain unfinished. Low SMG
+  aiming adds upper-body rotation offsets over crouch-walk/crawl loops, so
+  movement continues while firing. RPG/grenades retain native aim/release arm
+  rotations on the low body, with native trajectory/ammo/timing preserved.
+  See [stealth animation port](MGSV_STEALTH_PORT.md).
+
 - **Hold Ninja Run near a structure**: attach from the ground or air. Facing its
   wall runs upward; facing along it runs sideways. A clear roof permits a swept
   step onto the top. No native Ninja Run interaction marker is required.
@@ -19,18 +46,38 @@ Full controls and move inputs: [Sam movelist](SAM_MOVELIST.md).
   Controller cling uses **Ninja Run + L3**. **V** also requests wall traversal.
   See [wall traversal](WALL_TRAVERSAL.md) for current limits and diagnostics.
 
-- **G**: toggle Sam's sword moveset.
 - **0**: open the menu, including the weapon selector.
 - **Q / E** (also **[ / ]**): select previous / next weapon.
 - **Mouse wheel Up / Down**: previous / next weapon, including Murasama and Unarmed.
 - **D-pad**: native inventory, including the heatknife.
 - **F7 / F8**: previous / next secondary mode; also selectable in the menu.
 - **C / controller subweapon button** with Bladewolf heatblades selected: throw.
-- **F / L3 alone** with Sai equipped: pull an eligible cyborg toward Raiden.
-- **F / L3 alone** with Sai equipped: pull an eligible cyborg toward Raiden.
+- **Tap F (keyboard) / click LEFT stick, L3 (controller)** with Sai equipped:
+  pull a living normal cyborg toward Raiden. Stand on the ground and face the
+  target within 15 metres. The enemy is physically dragged to 1.2 metres from
+  Raiden, including through the Sai throw/recovery animation. Hammer/heavy
+  cyborgs and bosses are excluded. No cooldown: release and press to repeat.
+  The weapon menu shows the last pull result. Diagnostics are saved to
+  `scripts/SaiPullRuntime.log` with the player state and target ID.
+- **Back + Heavy** with Sai equipped: Monsoon's launcher kick (Sai only),
+  including his native kick effect. Sai stays equipped and visible. Hold S
+  or left stick down and press the mapped Heavy attack while grounded and
+  free to attack. The retargeted kick uses Raiden's native upward kick damage
+  reaction and a physical upward impulse on a confirmed hit against a normal
+  cyborg. Misses do not launch or add damage. Jump into an air combo after it
+  hits; the weapon menu reports kick startup and confirmed launches.
+  Light, Heavy, Jump and F / L3 pull can cancel the kick's recovery. Follow-up
+  taps buffer for 12 updates, pause during hit-stop, and enter the native input
+  selector from frame 44 after a confirmed launch or frame 64 after a miss.
+  Holding the original Heavy press does not automatically repeat the kick.
+- **Sai Y / Heavy**: Stabbing Despair (Combo List 35), with native Force of
+  Magnetism (37) on the target follow-up. During throw recovery, press Y again
+  for Double Throw Stab (36). After Force of Magnetism, continue Y, Y for
+  Spin Slice (38) and Sommersault (39). In the air, Y performs Unavoidable Fate
+  (40). Extra follow-ups buffer for 24 updates and start after frame 8; each
+  step requires a fresh Heavy press.
 - **F** in Sam mode: sweeping finisher against a nearby weak cyborg.
 - **X** or **controller B / Circle** in Sam mode: queue the next lightning ultimate.
-- **Select / Back** or **L3 + R3**: toggle Sam's moveset.
 - Directional Light/Heavy and flick inputs add boss attacks; see
   [directional controls](DIRECTIONAL_MOVES.md).
 
@@ -50,7 +97,7 @@ motion now skips absent optional weapon objects safely.
 Selecting Murasama enables Sam's moveset; selecting another melee weapon disables it,
 including a pending Sam activation. Q/E cycles through Murasama as
 a separate choice. Heatblades preserve Sam's moveset. Melee secondary weapons and unarmed combat use Raiden's native
-controller. G remains a synchronized Sam toggle. Switch inputs are reserved
+controller. Sam's moveset is enabled only through Murasama weapon selection. Switch inputs are reserved
 during normal gameplay; scripted/QTE input stays native. Native finishers/Zandatsu use
 their normal in-game prompts; F is a separate combat finisher.
 

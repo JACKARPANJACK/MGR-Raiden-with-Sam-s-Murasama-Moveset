@@ -118,7 +118,7 @@ public:
         // 2. Request all Sam object IDs from the engine CPK archive
         __try
         {
-            // Retain requests through G toggles and story suspension. They are
+            // Retain requests through weapon switches and story suspension. They are
             // balanced only after the native player has finished shutdown.
             bool accepted = true;
             for (auto& resource : m_requests)

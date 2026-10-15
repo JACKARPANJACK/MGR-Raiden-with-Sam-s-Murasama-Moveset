@@ -23,6 +23,7 @@
 #include "SamNativeExecution.h"
 #include "SamTemplateExecution.h"
 #include "SamChargeFxPolicy.h"
+#include "SamAttackInputPolicy.h"
 #include "SamRoundTripPolicy.h"
 #include "SamRockProjectile.h"
 #include "SamElectricCombat.h"
@@ -69,7 +70,7 @@ public:
     };
 
 private:
-    // Requested is the user's G toggle. Active is only set after the DLC
+    // Requested is the user's Murasama selection. Active is only set after the DLC
     // archive has finished streaming and the routing has been installed.
     bool m_bEnabled = false;
     bool m_bActive = false;
@@ -86,6 +87,11 @@ private:
     const char* m_pBossEnderCode = nullptr;
     SamUltimatePolicy::Queue m_ultimateQueue;
     SamDirectionalPolicy::CombatInput m_directionalInput;
+    SamAttackInputPolicy::Reader m_attackInput;
+    char m_nativeCombatClip[5]{};
+    bool m_combatAllowed=false,m_combatFocused=false,m_combatSampled=false;
+    unsigned m_preCombatAction=0;
+    unsigned m_savedSprintOn=0,m_savedSprintTrig=0,m_savedPlayerSprintOn=0,m_savedPlayerSprintTrig=0;
     int m_pendingAddon = -1;
     unsigned m_addonTicks = 0;
     SamDirectionalPolicy::Direction m_pendingDirection = SamDirectionalPolicy::None;
@@ -543,6 +549,7 @@ public:
 
     void RecordSequenceReplacement(const char* code)
     {
+        if(!m_bBossEnderActive && SamArchiveLookup::ValidCode(code))std::memcpy(m_nativeCombatClip,code,5);
         ++m_debug.sequenceReplacements;
         Log("[SamMoveset] SEQUENCE supplied: code=%s total=%u", code, m_debug.sequenceReplacements);
     }
@@ -1004,7 +1011,10 @@ public:
             RecordActionHandler("sam-template-execution");return;
         }
         const bool down = (GetAsyncKeyState('X') & 0x8000) != 0;
-        const bool pressed = focused && SamUltimatePolicy::ReserveButton(player->m_Rno0,
+        const unsigned sprintButton=player->m_ButtonNinjarun&~0xFu;
+        const bool sprinting=SamDirectionalPolicy::NativeSprint(player->m_Rno0,
+            ((player->m_CurrentInput.m_On|g_dbPad.m_On)&sprintButton)!=0);
+        const bool pressed = focused && !sprinting && SamUltimatePolicy::ReserveButton(player->m_Rno0,
             player->isAlive()!=FALSE,player->isInAir()!=FALSE,
             Trigger::StpFlags.STP_OBJ||g_StaFlags.STA_QTE||g_StaFlags.STA_EVENT||g_StaFlags.STA_CODEC||g_StaFlags.STA_SOFT_EVENT,
             player->isBladeModeActive()!=FALSE,m_subweaponActive) && ((down && !m_xDown) ||
@@ -1019,7 +1029,9 @@ public:
         const unsigned action = player->m_Rno0;
         RecordActionHandler("sam-native");
         const bool charging = ChargeController::IsChargeAction(action) || action == 0x100015 || action == 0x100016;
-        const bool heavyHeld = ((player->m_ButtonHeavyAttack & player->m_CurrentInput.m_On) != 0);
+        const auto attack=m_attackInput.Poll(player->m_CurrentInput.m_On|g_dbPad.m_On,
+            player->m_CurrentInput.m_Trig|g_dbPad.m_Trig,player->m_ButtonLightAttack,player->m_ButtonHeavyAttack);
+        const bool heavyHeld = attack.heavyHeld;
         m_chargeController.Tick(charging && heavyHeld, airborne);
 
         // Paired Sam sequences and Sam's native charge handler own charge FX.
@@ -1034,18 +1046,20 @@ public:
             invalidDirection = (a && d) || (w && s);
             if (keyboardDirection) { stickX=float(d)-float(a); stickY=float(w)-float(s); }
         }
-        const bool lightTrig = (player->m_ButtonLightAttack & player->m_CurrentInput.m_Trig) != 0;
-        const bool heavyTrig = (player->m_ButtonHeavyAttack & player->m_CurrentInput.m_Trig) != 0;
-        const bool lightHeld = (player->m_ButtonLightAttack & player->m_CurrentInput.m_On) != 0;
+        const bool lightTrig = attack.light;
+        const bool heavyTrig = attack.heavy;
+        const bool lightHeld = attack.lightHeld;
+        if(lightTrig || heavyTrig)Log("[SamMoveset] INPUT action=%X pre=%X clip=%s light=%u heavy=%u heldH=%u",action,
+            m_preCombatAction,m_nativeCombatClip,unsigned(lightTrig),unsigned(heavyTrig),unsigned(heavyHeld));
         const bool chord = (lightTrig && (heavyTrig || heavyHeld)) || (heavyTrig && lightHeld);
-        const bool inputAllowed = focused && alive && !airborne && !m_roundTripActive &&
+        const bool inputAllowed = focused && alive && !airborne && !sprinting && !m_roundTripActive &&
             !player->isBladeModeActive() && !g_StaFlags.STA_PAUSE && !invalidDirection &&
             (SamUltimatePolicy::Neutral(action) || SamUltimatePolicy::Attack(action) || action == SamUltimatePolicy::Action);
         if (!inputAllowed || chord) m_directionalInput.Reset();
         const int addon = inputAllowed && !chord ? m_directionalInput.Poll(stickX, stickY,
             lightTrig, heavyTrig, !keyboardDirection) : -1;
         const auto currentDirection = SamDirectionalPolicy::Resolve(stickX, stickY);
-        if (lightTrig || heavyTrig ||
+        if ((lightTrig && m_pendingAddon!=SamLightComboPolicy::MoveIndex) || heavyTrig ||
             (m_pendingDirection != SamDirectionalPolicy::None && currentDirection != SamDirectionalPolicy::None &&
                 currentDirection != m_pendingDirection) ||
             (currentDirection == SamDirectionalPolicy::None &&
@@ -1053,14 +1067,15 @@ public:
         { m_pendingAddon = -1; m_pendingDirection = SamDirectionalPolicy::None; }
         const bool neutralLight = inputAllowed && !chord && lightTrig &&
             std::fabs(stickX)<0.25f && std::fabs(stickY)<0.25f && addon<0;
-        const char* nativeClip = player->m_pAnimationSlot && player->m_pAnimationSlot->m_pArray ?
-            player->m_pAnimationSlot->m_pArray[0].m_pAnimName : nullptr;
+        const char* nativeClip = m_nativeCombatClip;
         const bool nativeEnder = !m_bBossEnderActive && SamUltimatePolicy::Attack(action) &&
             SamLightComboPolicy::NativeEnder(nativeClip);
         const bool bossLight = m_bBossEnderActive && m_currentUltimate == SamLightComboPolicy::MoveIndex;
         const bool completedEnder = m_lightCombo.pending && m_pendingAddon == SamLightComboPolicy::MoveIndex &&
-            !m_bBossEnderActive && SamUltimatePolicy::Neutral(action);
-        m_lightCombo.Poll(inputAllowed && (nativeEnder || completedEnder || bossLight), neutralLight,
+            !m_bBossEnderActive && (SamUltimatePolicy::Neutral(action) || SamUltimatePolicy::Attack(action));
+        const bool heldLightContinuation=inputAllowed && !chord && lightHeld &&
+            (nativeEnder || bossLight) && std::fabs(stickX)<0.25f && std::fabs(stickY)<0.25f;
+        m_lightCombo.Poll(inputAllowed && (nativeEnder || completedEnder || bossLight), neutralLight || heldLightContinuation,
             heavyTrig || chord || addon >= 0 || invalidDirection ||
             std::fabs(stickX)>=0.25f || std::fabs(stickY)>=0.25f);
         if (nativeEnder && m_lightCombo.pending && MoveReady(SamLightComboPolicy::MoveIndex))
@@ -1078,11 +1093,11 @@ public:
         {
             m_pendingAddon = addon;
             m_pendingDirection = currentDirection;
-            m_addonTicks = 18;
+            m_addonTicks = 360;
             m_ultimateQueue.Reset();
             player->m_CurrentInput.m_Trig &= ~(player->m_ButtonLightAttack | player->m_ButtonHeavyAttack);
         }
-        if (finisherPressed && alive && !airborne && !m_roundTripActive && !m_bBossEnderActive &&
+        if (finisherPressed && !sprinting && alive && !airborne && !m_roundTripActive && !m_bBossEnderActive &&
             (SamUltimatePolicy::Neutral(action) || SamUltimatePolicy::Attack(action)) &&
             m_electricCombat.FinisherAvailable(player))
         {
@@ -1136,7 +1151,8 @@ public:
             const bool stageFinished=bossLight ?
                 reinterpret_cast<float(__thiscall*)(Behavior*,int)>(shared::base+0x695BD0)(player,0)<=0.001f :
                 SamStagePolicy::Finished(m_stageFrame,m_stageLength);
-            if (stageFinished)
+            const bool chargeWait=SamAttackInputPolicy::ChargeWait(m_chargeFx.active,heavyHeld,m_bossEnderTicks);
+            if (stageFinished && !chargeWait)
             {
                 const auto& activeMove = SamUltimatePolicy::Moves[m_currentUltimate];
                 if (m_ultimateStage + 1 < activeMove.Stages().size() &&
@@ -1154,6 +1170,7 @@ public:
             return;
         }
 
+        if(sprinting)m_ultimateQueue.Reset();
         m_ultimateQueue.Tick(action, alive, airborne);
         if (!alive || airborne) { m_lightCombo.Reset(); return; }
         if (!m_roundTripActive && pressed && (SamUltimatePolicy::Neutral(action) || SamUltimatePolicy::Attack(action)))
@@ -1163,7 +1180,11 @@ public:
         }
         if (m_roundTripActive || (!m_ultimateQueue.pending && m_pendingAddon < 0)) return;
         const bool finished = g_GameFunctionManager.IsAnimationEnded(player, 0);
-        if (!SamUltimatePolicy::CanStart(action, alive, airborne, finished)) return;
+        const bool restartedLight=m_pendingAddon==SamLightComboPolicy::MoveIndex && m_lightCombo.pending &&
+            !std::strcmp(m_nativeCombatClip,"2000");
+        const bool freshAttack=restartedLight ||
+            (addon>=0 && (lightTrig || heavyTrig) && SamUltimatePolicy::Neutral(m_preCombatAction));
+        if (!SamUltimatePolicy::CanStart(action, alive, airborne, finished,freshAttack)) return;
         m_currentAddon = m_pendingAddon >= 0;
         m_currentUltimate = m_currentAddon ? static_cast<unsigned>(m_pendingAddon) :
             SamUltimatePolicy::UltimateIndex(m_bossEnderIndex);
@@ -1202,37 +1223,27 @@ public:
         else if (!m_currentAddon) ++m_bossEnderIndex;
     }
 
-    void Toggle(Pl0000* player)
-    {
-        if (!SamPlayerIdentity::Eligible(player)) return;
-        if (SamExecutionPolicy::Native(player->m_Rno0) || SamTemplateExecution::Get().Active(player)) return;
-
-        if (m_bActive || m_bEnabled)
-        {
-            Deactivate(player);
-        }
-        else
-        {
-            m_bEnabled = true;
-            Log("[SamMoveset] G toggle ON requested");
-            SamResourceManager::Instance().RequestAllSamResources();
-            SamResourceManager::Instance().Update();
-            Activate(player);
-        }
-    }
-
     void SetEnabled(Pl0000* player,bool enabled)
     {
-        if(!SamPlayerIdentity::Eligible(player)) return;
-        if(enabled)
+        if (!SamPlayerIdentity::Eligible(player)) return;
+        if (!enabled)
         {
-            if(!m_bEnabled && !m_bActive) Toggle(player);
+            if (m_bEnabled || m_bActive) Deactivate(player);
+            return;
         }
-        else if(m_bEnabled || m_bActive) Deactivate(player);
+        if (m_bEnabled || m_bActive) return;
+        if (SamExecutionPolicy::Native(player->m_Rno0) || SamTemplateExecution::Get().Active(player)) return;
+
+        m_bEnabled = true;
+        Log("[SamMoveset] Murasama selection ON requested");
+        SamResourceManager::Instance().RequestAllSamResources();
+        SamResourceManager::Instance().Update();
+        Activate(player);
     }
 
     void OnTick(Pl0000* player)
     {
+        m_combatAllowed=false;m_combatSampled=false;
         if (!player || reinterpret_cast<uintptr_t>(player) < 0x10000) return;
         if (!player->m_pEntity || reinterpret_cast<uintptr_t>(player->m_pEntity) < 0x10000) return;
         if (!SamPlayerIdentity::Eligible(player)) return;
@@ -1243,26 +1254,8 @@ public:
         // Service DLC resource streaming every tick
         SamResourceManager::Instance().Update();
 
-        // Toggle check: 'G' on keyboard, or Back/Select on controller
-        static bool s_wasGDown = false;
-        bool isGDown = (GetAsyncKeyState('G') & 0x8000) != 0;
-        bool kbToggle = isGDown && !s_wasGDown;
-        s_wasGDown = isGDown;
-
-        // Controller toggle: Back / Select (0x0020), or L3 + R3
-        static_assert(SamUltimatePolicy::ControllerButton==Hw::PAD_BTN_B && SamUltimatePolicy::SelectButton==Hw::PAD_BTN_SL);
-        const bool padDown = ((g_dbPad.m_Trig & SamUltimatePolicy::SelectButton) != 0) ||
-            ((g_dbPad.m_On & SamUltimatePolicy::LeftStickButton) && (g_dbPad.m_Trig & SamUltimatePolicy::RightStickButton));
-        static bool s_wasPadDown = false;
-        bool padToggle = padDown && !s_wasPadDown;
-        s_wasPadDown = padDown;
-
         DWORD foregroundProcess = 0;
         GetWindowThreadProcessId(GetForegroundWindow(), &foregroundProcess);
-        if (foregroundProcess == GetCurrentProcessId() && !StoryEvent() &&
-            !Trigger::StpFlags.STP_OBJ && (kbToggle || padToggle))
-            Toggle(player);
-
         if (!m_bEnabled && !m_bActive)
             return;
 
@@ -1284,11 +1277,45 @@ public:
             m_pendingDirection = SamDirectionalPolicy::None;
             return;
         }
-        UpdateUltimate(player, foregroundProcess == GetCurrentProcessId() && !gui::IsMenuVisible());
+        m_combatAllowed=true;
+        m_preCombatAction=player->m_Rno0;
+        m_combatFocused=foregroundProcess == GetCurrentProcessId() && !gui::IsMenuVisible();
+        if(m_bBossEnderActive) {
+            const unsigned run=player->m_ButtonNinjarun&~0xFu;
+            m_savedSprintOn=g_dbPad.m_On&run;m_savedSprintTrig=g_dbPad.m_Trig&run;
+            m_savedPlayerSprintOn=player->m_CurrentInput.m_On&run;
+            m_savedPlayerSprintTrig=player->m_CurrentInput.m_Trig&run;
+            g_dbPad.m_On&=~run;g_dbPad.m_Trig&=~run;
+            player->m_CurrentInput.m_On&=~run;player->m_CurrentInput.m_Trig&=~run;
+        }
+    }
+
+    void RestoreCombatInputs()
+    {
+        g_dbPad.m_On|=m_savedSprintOn;g_dbPad.m_Trig|=m_savedSprintTrig;
+        if(m_activePlayer) {
+            m_activePlayer->m_CurrentInput.m_On|=m_savedPlayerSprintOn;
+            m_activePlayer->m_CurrentInput.m_Trig|=m_savedPlayerSprintTrig;
+        }
+        m_savedSprintOn=m_savedSprintTrig=m_savedPlayerSprintOn=m_savedPlayerSprintTrig=0;
+    }
+    void SampleCombatInputs(Pl0000* player,bool nativeDispatch=false)
+    {
+        if(!m_combatAllowed || m_combatSampled || !m_bActive || player!=m_activePlayer)return;
+        m_combatSampled=true;UpdateUltimate(player,m_combatFocused);
+        if(nativeDispatch && m_bBossEnderActive) {
+            const unsigned run=player->m_ButtonNinjarun&~0xFu;
+            m_savedSprintOn|=g_dbPad.m_On&run;m_savedSprintTrig|=g_dbPad.m_Trig&run;
+            m_savedPlayerSprintOn|=player->m_CurrentInput.m_On&run;
+            m_savedPlayerSprintTrig|=player->m_CurrentInput.m_Trig&run;
+            g_dbPad.m_On&=~run;g_dbPad.m_Trig&=~run;
+            player->m_CurrentInput.m_On&=~run;player->m_CurrentInput.m_Trig&=~run;
+        }
     }
 
     void PostTick(Pl0000* player)
     {
+        SampleCombatInputs(player); // fallback for native states that bypass action dispatch
         if (!m_bActive || player != m_activePlayer || Trigger::StpFlags.STP_OBJ ||
             m_storySuspended || StoryEvent()) return;
         if(SamTemplateExecution::Get().Active(player)) {

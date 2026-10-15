@@ -9,6 +9,8 @@
 #include "injector/injector.hpp"
 #include "KunaiPolicy.h"
 #include "WeaponSwitchPolicy.h"
+#include "SaiPullDiagnostics.h"
+#include "MonsoonKickPolicy.h"
 
 
 
@@ -126,17 +128,12 @@ static void RenderSamDebug()
         else
         {
             ImGui::TextColored(ImVec4(1.0f, 0.7f, 0.2f, 1.0f),
-                "=== STATUS: RAIDEN NATIVE COMBAT (Press 'G' or button below) ===");
+                "=== STATUS: RAIDEN NATIVE COMBAT (Select Murasama below) ===");
         }
 
         ImGui::Spacing();
 
         // Control Buttons
-        if (ImGui::Button(state.active ? "Deactivate Moveset (G)" : "Activate Sam Moveset (G)", ImVec2(220, 28)))
-        {
-            gui::ToggleMovesetFromGUI();
-        }
-        ImGui::SameLine();
         if (ImGui::Button("Stream/Reload Resources", ImVec2(180, 28)))
         {
             gui::RequestResourcesFromGUI();
@@ -150,11 +147,28 @@ static void RenderSamDebug()
         for(int i=0;i<WeaponSwitchPolicy::Count;++i) weaponNames[i]=WeaponSwitchPolicy::Weapons[i].name;
         int selectedWeapon=gui::PendingWeapon()<0?gui::SelectedWeapon():gui::PendingWeapon();
         if(ImGui::Combo("Weapon",&selectedWeapon,weaponNames,static_cast<int>(sizeof(weaponNames)/sizeof(*weaponNames)))) gui::SelectWeapon(selectedWeapon);
-        ImGui::TextWrapped("D-pad Down: next weapon, cycling through the full list including wp2050 dual swords. Mouse wheel Up / Down or Q / E: previous / next weapon. Sam attacks can swap in their final 6 recovery frames. G / Select toggles Sam.");
+        ImGui::TextWrapped("D-pad Down: next weapon, cycling through the full list including wp2050 dual swords. Mouse wheel Up / Down or Q / E: previous / next weapon. Sam attacks can swap in their final 6 recovery frames. Select Murasama to enable Sam's moveset.");
         if(gui::PendingWeapon()>=0) ImGui::Text("Weapon switch queued...");
+        if(gui::SelectedWeapon()==WeaponSwitchPolicy::Sai)
+            ImGui::TextWrapped("Sai launcher: hold Back (S / left stick down) + press Heavy for Monsoon's kick with his native kick effect. The equipped Sai stays attached. Jump after a hit for an air follow-up.");
+        if(gui::SelectedWeapon()==WeaponSwitchPolicy::Sai)
+            ImGui::TextWrapped("Kick follow-ups: tap Light, Heavy, Jump, or F / L3 during recovery. Inputs buffer for 12 updates; confirmed hits cancel from frame 44, misses from frame 64. Heavy returns to native Sai moves; holding the launcher button alone does not repeat it.");
+        if(gui::SelectedWeapon()==WeaponSwitchPolicy::Sai)
+            ImGui::TextWrapped("Monsoon kick: %s",MonsoonKickPolicy::Status.load());
+        if(gui::SelectedWeapon()==WeaponSwitchPolicy::Sai)
+            ImGui::TextWrapped("Sai: Y/Heavy throws Stabbing Despair; target follow-up Y uses Force of Magnetism. Y during throw recovery: Double Throw Stab. After Force of Magnetism, Y then Y: Spin Slice, Sommersault. Mid-air Y: Unavoidable Fate.");
+        if(gui::SelectedWeapon()==WeaponSwitchPolicy::Sai)
+            ImGui::TextWrapped("Get over here: tap F (keyboard) or click the LEFT stick / L3 (controller). With Sai equipped, face a living normal cyborg within 15 metres. The enemy is dragged physically to 1.2 metres from Raiden. No cooldown; release and press again to repeat. Hammer/heavy cyborgs and bosses are excluded.");
+        if(gui::SelectedWeapon()==WeaponSwitchPolicy::Sai)
+            ImGui::TextWrapped("Sai pull: %s",SaiPullDiagnostics::status.load());
         ImGui::TextWrapped("%s",gui::DualBladeStatus());
         bool walls=false;int wallMode=0;unsigned wallTicks=0;float wallDistance=0;const char* wallStatus=nullptr;
         gui::GetWallTraversalView(walls,wallMode,wallTicks,wallDistance,wallStatus);
+        ImGui::Text("Stance: %s",gui::StanceStatus());
+        ImGui::TextWrapped("CQC: %s",gui::CqcStatus());
+        ImGui::TextWrapped("Unarmed: neutral Light/Heavy = regular native attacks. Continue Light during the fourth native punch to append MGSV's four-hit combo; fresh Light presses chain each hit. Forward + Light = direct MGSV CQC combo; Forward + Heavy = grab. In grab: direction + Light = throw; Back + Heavy = knife; neutral Heavy = release; neutral Light = MGSV strikes. F / controller B = rear stealth takedown. Prone CQC rises into a low grab.");
+        ImGui::TextWrapped("Stealth: %s",gui::StealthDetectionStatus());
+        ImGui::TextWrapped("G / R3: Standing > Crouch > Prone. Jump (default Space) while crouched: dolphin dive. Jump + A/D or stick left/right while prone: tactical roll. These moves end prone. Native Jump is filtered in crouch/prone. Low gun aiming layers over walk/crawl motion.");
         if(ImGui::Checkbox("Wall traversal",&walls))gui::EnableWallTraversal(walls);
         ImGui::Text("Wall: %s | %.2fm | %.1fs",wallStatus?wallStatus:"ready",wallDistance,wallTicks/60.0f);
         ImGui::TextWrapped("Custom wallruns require a building or large barricade face. Small props and native parkour segments use regular Ninja Run. Y/secondary attack starts wallsliding: W/Up goes up, S/Down goes down, and A/D steers sideways. Z/L3 clings; X also slides. Wallruns jump over obstacles when the path and catch are clear. Jump launches away; Light Attack or F launches toward an enemy.");
@@ -189,8 +203,9 @@ static void RenderSamDebug()
 
         ImGui::TextWrapped("Hold one direction and press Light or Heavy. Taps and holds use the same mapping. Keep that direction and press the next attack within 0.6 seconds to enter a combo; release the first attack before pressing the next. L = Light, H = Heavy.");
         ImGui::TextWrapped("Forward: L evade, H charged slash, LL rapid slashes, LH lightning draw, HL thunder slice. Back: L sweep finisher, H stone burst, LL sweeping combo, LH grab/smash, HL Round Trip.");
+        ImGui::TextWrapped("Grab/smash can pick up a living ordinary cyborg within 10 metres and bring it to the grip position.");
         ImGui::TextWrapped("Left: L left evade, H backward evade, LL tackle/smash, LH sonic slash. Right: L right evade, H advancing flurry, LL leap, LH lightning storm.");
-        ImGui::TextWrapped("360 stick + Heavy: Judgement Cut. Keep pressing neutral Light to extend the regular Sam light combo through template attacks 9000 > 9001 > 9002 > 9003. Each extra press buffers the next stage; stopping ends the string. X remains a shortcut for Raiden specials.");
+        ImGui::TextWrapped("360 stick + Heavy: Judgement Cut. Sprinting uses only native Sam Run + Light / Run + Heavy; added specials are blocked. Press or hold neutral Light through the base finisher to continue 9000 > 9001 > 9002 > 9003. Hold Heavy during a Boss charge to build up; release after the windup or wait for full-charge release. X cycles Raiden specials.");
         ImGui::TextWrapped("F cycles paired grab/smash, charge stab and sweeping finisher. Executions require a living cyborg within 3m and at or below 25% HP. A confirmed parry counter can execute its attacker under the same conditions.");
         static const char* s_moveNames[] = {
             "Raiden thunder slice (pl0010 2400)",

@@ -16,6 +16,9 @@ namespace gui
     struct KunaiAimView { bool active=false; unsigned frames=0,targets=0,ammo=0,recovery=0; int variant=0; };
     void GetKunaiAimView(KunaiAimView& out);
     bool IsMenuVisible();
+    const char* StanceStatus();
+    const char* CqcStatus();
+    const char* StealthDetectionStatus();
     void GetWallTraversalView(bool& enabled,int& mode,unsigned& ticks,float& distance,const char*& status);
     void EnableWallTraversal(bool enabled);
     static constexpr size_t MAX_HISTORY = 32;
@@ -45,7 +48,6 @@ namespace gui
     };
 
     void GetDebugView(DebugView& out);
-    void ToggleMovesetFromGUI();
     void RequestResourcesFromGUI();
     void CycleNextUltimate();
     void SelectUltimate(unsigned int index);

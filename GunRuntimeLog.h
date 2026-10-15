@@ -7,6 +7,7 @@
 namespace GunRuntimeLog
 {
     inline bool selected=false;
+    inline bool cqcSelected=false;
     inline const char* stage="startup";
     inline void Write(const char* format,...)
     {
@@ -20,8 +21,8 @@ namespace GunRuntimeLog
     }
     inline int Exception(EXCEPTION_POINTERS* info,const char* phase)
     {
-        // The frame hook must remain fail-safe, but gun failures must be visible.
-        if(selected && info && info->ExceptionRecord)
+        // The frame hook remains fail-safe; gun and CQC failures stay visible.
+        if((selected || cqcSelected) && info && info->ExceptionRecord)
         {
             static DWORD last=0;
             const DWORD now=GetTickCount();
