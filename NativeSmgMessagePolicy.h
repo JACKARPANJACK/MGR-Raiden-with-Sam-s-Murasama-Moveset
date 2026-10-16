@@ -4,52 +4,54 @@
 #include <cstring>
 
 // Add messages to the existing native MCD renderer without replacing its font
-// bank or any stock RPG messages. Only our two private event hashes/indices are
+// bank or any stock RPG messages. Only our private event hashes/indices are
 // intercepted; glyphs, textures, wrapping and layout remain native.
 namespace NativeSmgMessagePolicy
 {
     constexpr const char* TypeKey="codex_smg_type",*DescriptionKey="codex_smg_description";
-    constexpr const char* NameKey="codex_smg_name",*Name="Kriss Vector SMG";
-    constexpr const char* Type="Sub machine gun";
-    constexpr std::array<const char*,3> Description{{
-        "KRISS Vector submachine gun.",
-        "Hold C to fire immediately.",
-        "Move, jump or slide while shooting.",
-    }};
-    constexpr const char* LastLine="Flick then C for spray. Release C to stop.";
+    constexpr const char* NameKey="codex_smg_name",*Name="KRISS Vector SMG";
     constexpr int FirstIndex=0x70000000;
     struct Line {unsigned offset,padding,length,lengthWithEnd,height,horiz;};
     struct Text {unsigned offset,count,vpos,hpos,font;};
     struct Message {Text text{};std::array<Line,4> lines{};std::array<std::array<unsigned short,160>,4> content{};};
-    inline std::array<Message,3> messages{};
-    inline bool Generate(void* table,unsigned which)
+    #include "NativeWeaponMessages.generated.h"
+    inline std::array<Message,KeyCount> messages{};
+    inline bool Generate(void* table,unsigned which,Message* destination=nullptr)
     {
+        if(which>=messages.size())return false;
         auto* data=static_cast<unsigned char*>(table);
         const auto* header=reinterpret_cast<unsigned*>(data);
         if(!header[2] || !header[3] || header[3]>65536 || !header[6] || header[7]>64) return false;
-        const char* lines[4]={which==1?Description[0]:which==2?Name:Type,Description[1],Description[2],LastLine};
-        const unsigned count=which==1?4:1;
+        const auto& lines=KeyLines[which];
+        const unsigned count=LineCounts[which];
         const unsigned short* symbols=reinterpret_cast<unsigned short*>(data+header[2]);
-        // Pick an available native font containing every requested ASCII glyph.
-        // Font IDs and glyph indices differ across localized banks.
+        // Keep retail UI typography: long item labels use font 10, body
+        // descriptions font 3, and abbreviated HUD labels built-in font 0.
         std::array<unsigned short,128> glyphs{};
-        unsigned font=0;bool found=false;
-        for(unsigned f=0;f<header[7] && !found;++f)
-        {
-            font=*reinterpret_cast<unsigned*>(data+header[6]+f*20);
-            glyphs.fill(0xFFFF);
-            for(unsigned s=0;s<header[3];++s)
-                if(symbols[s*4]==font && symbols[s*4+1]<128)
-                    glyphs[symbols[s*4+1]]=static_cast<unsigned short>(*reinterpret_cast<const unsigned*>(symbols+s*4+2));
-            found=true;
-            for(unsigned l=0;l<count;++l) for(const char* p=lines[l];*p;++p)
-                if(*p!=' ' && glyphs[static_cast<unsigned char>(*p)]==0xFFFF) found=false;
+        glyphs.fill(0xFFFF);
+        unsigned font=MessageFonts[which];
+        bool available=false;
+        for(unsigned f=0;f<header[7];++f)
+            if(*reinterpret_cast<unsigned*>(data+header[6]+f*20)==font)available=true;
+        if(!available)font=3;
+        for(unsigned s=0;s<header[3];++s)
+            if(symbols[s*4]==font && symbols[s*4+1]<128)
+                glyphs[symbols[s*4+1]]=static_cast<unsigned short>(*reinterpret_cast<const unsigned*>(symbols+s*4+2));
+        if(font==0) {
+            for(unsigned c='A';c<='Z';++c)glyphs[c]=static_cast<unsigned short>(0x400f+c-'A');
+            for(unsigned c='0';c<='9';++c)glyphs[c]=static_cast<unsigned short>(0x4000+c-'0');
         }
+        if(font==10 && glyphs['0']==0xFFFF)
+            for(unsigned s=0;s<header[3];++s)
+                if(symbols[s*4]==3 && symbols[s*4+1]=='0')glyphs['0']=static_cast<unsigned short>(symbols[s*4+2]);
+        bool found=true;
+        for(unsigned l=0;l<count;++l)for(const char* p=lines[l];*p;++p)
+            if(*p!=' ' && glyphs[static_cast<unsigned char>(*p)]==0xFFFF)found=false;
         if(!found) return false;
-        auto& m=messages[which];
+        auto& m=destination?*destination:messages[which];
         const uintptr_t base=reinterpret_cast<uintptr_t>(table);
         m.text={unsigned(reinterpret_cast<uintptr_t>(m.lines.data())-base),count,0,0,font};
-        unsigned height=39;
+        unsigned height=39,total=0;
         for(unsigned f=0;f<header[7];++f)
             if(*reinterpret_cast<unsigned*>(data+header[6]+f*20)==font)
             {height=unsigned(*reinterpret_cast<float*>(data+header[6]+f*20+8));break;}
@@ -66,8 +68,10 @@ namespace NativeSmgMessagePolicy
             // MGR counts characters (each has a kerning word), not ushort
             // tokens, and uses integer line height. The end marker adds one.
             const unsigned characters=(n-1)/2;
-            m.lines[l]={unsigned(reinterpret_cast<uintptr_t>(m.content[l].data())-base),0,characters,characters+1,height,0};
+            m.lines[l]={unsigned(reinterpret_cast<uintptr_t>(m.content[l].data())-base),total,characters,characters+1,height,0};
+            total+=characters;
         }
+        m.text.hpos=total;
         return true;
     }
 }

@@ -17,7 +17,7 @@
 // the retargeted stance after native update and are restored before its next tick.
 class StealthStanceController {
     using Stance=StealthStancePolicy::Stance;
-    struct Saved {short bone;cParts* part;Hw::cMtx matrix;unsigned short flags;};
+    struct Saved {short bone;cParts* part;Hw::cMtx matrix;unsigned short flags;int slot=-1;};
     struct Sample {short bone;D3DXMATRIX from,last;};
     EntityHandle visualOwner;
     Pl0000* owner=nullptr;
@@ -95,7 +95,7 @@ class StealthStanceController {
         if(!p || cycle.Selected()==Stance::Standing || !g_pPlayerManager)return false;
         const int slot=g_pPlayerManager->getSubWeaponEquipped();
         const bool held=(GetAsyncKeyState('C')&0x8000)||((p->m_CurrentInput.m_On|g_dbPad.m_On)&StealthStancePolicy::ButtonBits(p->m_ButtonUseSubweapon));
-        return (slot==11 && KunaiSubweapon::Get().IsSmgActive() && KunaiSubweapon::GetSmg().UsesReadyPose()) || ((held || NativeWeaponAction(p->m_Rno0)) && slot>=1 && slot<=6);
+        return (NativeSmgMenuPolicy::GunSlot(slot) && KunaiSubweapon::Get().IsSmgActive() && KunaiSubweapon::GetSmg().UsesReadyPose()) || ((held || NativeWeaponAction(p->m_Rno0)) && slot>=1 && slot<=6);
     }
     bool Ground(Pl0000* p) const {return BaseGround(p);}
     bool Load() {
@@ -122,9 +122,15 @@ class StealthStanceController {
     }
     void RestorePose() {
         Entity* actor=visualOwner.getEntity();
-        for(auto& s:saved)
-            if(actor && actor->m_pBehavior && actor->m_pBehavior->getPartsPtr(s.bone)==s.part)
-            {s.part->m_LocalMatrix=s.matrix;s.part->m_PartsFlag.m_Flag=s.flags;}
+        for(auto& s:saved) {
+            if(!actor || !actor->m_pBehavior)continue;
+            auto* behavior=actor->m_pBehavior;
+            auto* storage=behavior->m_pParent?behavior->m_pParent:behavior;
+            const auto& bones=storage->m_PartsData;
+            auto* part=s.slot<0?behavior->getPartsPtr(s.bone):s.slot<bones.m_BoneNum?
+                (bones.m_ppBones?bones.m_ppBones[s.slot]:bones.m_pBones?bones.m_pBones+s.slot:nullptr):nullptr;
+            if(part==s.part){s.part->m_LocalMatrix=s.matrix;s.part->m_PartsFlag.m_Flag=s.flags;}
+        }
         saved.clear();visualOwner=EntityHandle{};
     }
     bool MotionActive(Pl0000* p) const {return p==owner && motion!=StealthMotionPolicy::Move::None && p->m_Rno0==StealthMotionPolicy::Action;}
@@ -177,6 +183,7 @@ public:
     static StealthStanceController& Get() {static StealthStanceController c;return c;}
     const char* Status() const {return status.load();}
     Stance SelectedStance() const {return cycle.Selected();}
+    bool HasAppliedPose() const {return poseApplied;}
     unsigned ClipFrames(int index) {return index>=0 && index<34 && Load()?clips[index].frames:0;}
     void CombatPose(int index,float frame) {combatClip=index;combatFrame=frame;}
     void QuietCqcProfile() {if(!revealTicks && !Paused() && !Scripted())detectionStance=unsigned(cycle.Selected());}
@@ -345,7 +352,7 @@ public:
         const bool nativeAim=weapon && StealthStancePolicy::NativeWeaponSlot(slot);
         if(nativeAim && !nativeReleaseReady){samples.clear();current=-1;return;}
         // MGSV has no prone RPG clip. Its prone rifle brace is the fallback.
-        const int weaponClip=slot==11 ? (stance==Stance::Crouch?12:13) : slot>=5 ?
+        const int weaponClip=NativeSmgMenuPolicy::GunSlot(slot) ? (stance==Stance::Crouch?12:13) : slot>=5 ?
             (stance==Stance::Crouch?14:13) : (stance==Stance::Crouch?33:16);
         const int wanted=combatClip>=0?combatClip:action?StealthMotionPolicy::Clip(motion,motionStage):StealthStancePolicy::BaseClip(stance,moving);
         if(wanted!=current) {
@@ -359,7 +366,8 @@ public:
         auto& clip=clips[current<0?0:current];
         const float delta=moving&&clip.stride>0?distance*float(clip.frames-1)/clip.stride:1.0f;
         phase=combatClip>=0?(std::min)(combatFrame,float(clip.frames-1)):action?(std::min)(motionPhase,float(clip.frames-1)):std::fmod(phase+delta,float(clip.frames-1));
-        if(action || combatClip>=0 || stance==Stance::Standing || nativeAim)aimWeight=0;
+        const bool pistol=slot==13 || slot==14;
+        if(action || combatClip>=0 || stance==Stance::Standing || nativeAim || pistol)aimWeight=0;
         else aimWeight=(std::clamp)(aimWeight+(weapon?.125f:-.125f),0.0f,1.0f);
         if(weapon) {
             lastAimClip=weaponClip;
@@ -399,6 +407,20 @@ public:
             }
             layers.push_back(node);parts.push_back(part);
         }
+        const size_t authoredCount=layers.size();
+        // Preserve costume-only jacket, twist, face and attachment descendants.
+        // These must follow their fitted parent even when the donor lacks them.
+        auto* storage=player->m_pParent?player->m_pParent:player;
+        const auto& bones=storage->m_PartsData;
+        if(bones.m_BoneNum>0 && bones.m_BoneNum<=4096)for(int i=0;i<bones.m_BoneNum;++i) {
+            auto* part=bones.m_ppBones?bones.m_ppBones[i]:bones.m_pBones?bones.m_pBones+i:nullptr;
+            if(!part || std::find(parts.begin(),parts.end(),part)!=parts.end())continue;
+            saved.push_back({-1,part,part->m_LocalMatrix,part->m_PartsFlag.m_Flag,i});
+            D3DXMATRIX world,relative;std::memcpy(&world,&part->m_LocalMatrix,64);
+            D3DXMatrixMultiply(&relative,&world,&inverse);
+            StealthAdditivePose::Node node;node.base=node.reference=node.aim=relative;
+            layers.push_back(node);parts.push_back(part);nativeArms.push_back(relative);
+        }
         for(size_t i=0;i<layers.size();++i) {
             auto parent=std::find(parts.begin(),parts.end(),parts[i]->m_pPartsParent);
             layers[i].parent=parent==parts.end()?-1:int(parent-parts.begin());
@@ -408,6 +430,11 @@ public:
         if(!layeredOk) {
             layered.clear();for(const auto& n:layers)layered.push_back(n.base);
         }
+        std::vector<D3DXMATRIX> fitted;
+        if(!StealthAdditivePose::FitToNative(layers,nativeArms,layered,authoredCount,fitted)) {
+            RestorePose();return;
+        }
+        layered.swap(fitted);
         for(size_t i=0;i<layers.size();++i) {
             D3DXMATRIX world;D3DXMatrixMultiply(&world,&layered[i],&basis);
             std::memcpy(&parts[i]->m_LocalMatrix,&world,sizeof(world));parts[i]->m_PartsFlag.m_Flag|=4;

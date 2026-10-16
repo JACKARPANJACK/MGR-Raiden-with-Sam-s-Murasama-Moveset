@@ -1,5 +1,21 @@
 # Rifle-cyborg gun set
 
+The SMG now follows the rifle pose's left-wrist firing grip (bone 9), using
+the rifle's grip rotation and translation instead of the enemy right-hand
+marker 0x701/13. Its native muzzle marker 0x300 remains unchanged. Both the
+native constraint and current-frame visual aim use this grip. The 720-frame
+pose regression passes; in-game visual verification remains pending.
+
+The firearm inventory now has separate Assault Rifle (slot 11, wp0040) and
+KRISS Vector SMG (slot 12, wp0020) entries. The rifle retains its four-tick
+fire interval. The Vector fires every two ticks, builds bloom by .035 rather
+than .015 per shot, caps bloom at .16 rather than .08, and adds a .14-radian
+visual recoil kick. Both retain separate 30-round magazines and reload state.
+The Vector uses native right-hand marker 0x701 and muzzle 0x300; the rifle keeps
+its left wrist 9 grip MOT. The shared body animation donor remains em0010.
+See the current controls in README.md.
+
+
 The donor is the basic rifle cyborg `em0010`, whose shared motion bank is
 `em0012.dat`. Native sequence gun-handling and magazine events identify its
 rifle clips. `em0040` is a tripod rig and is no longer used for player poses.
@@ -73,9 +89,10 @@ tests verify the descriptor constants; gameplay remains untested.
 
 The rifle's separate native owner handle at `cEm0010Weapon + 0x8CC` is populated
 alongside the hand constraint. Native rifle updates treat an empty handle as a
-detached weapon. Constraint ownership is checked before readiness. While a direct
-gun pose owns the player animation, the sword display is suppressed and restored
-when that pose ends.
+detached weapon. Constraint ownership is checked before readiness. During active
+aiming, the sword can be parked visibly on its sheath for that rendered frame.
+Its original hand/foot attachment and draw state return before the next native
+update. The gun does not change the sword entity's display flags.
 
 Effect registration failures do not block model attachment or projectile creation.
 The wp004f archive itself is required because it supplies the native grip motion.
@@ -93,7 +110,7 @@ With no lock and multiple enemies in range, each round samples the group area
 for suppressive fire while the stance remains aimed steadily at the nearest
 enemy. A live lock disables the spread and remains precise. When Raiden is above
 the target, the aim point drops to the enemy's lower body. Melee, jumping and
-scripted actions release the gun pose and restore the sword display. Grounded
+scripted actions release the gun pose and return sword handling to native animation. Grounded
 walk/run requests use the cyborg locomotion bank.
 
 ## Native grip and aim correction (runtime 9)
@@ -375,3 +392,42 @@ Runtime 26:
 - Manual Lock-On Tracking: When lock-on input is held, the system acquires and locks onto the targeted enemy, drawing the targeted lock ring on the reticle, focusing bullet spread, and enabling launcher rounds with Lock-On + C.
 - Airborne Upper-Body Shooting Pose: The upper-body rifle aiming and IK pose now applies during jumps and falling (`player->isInAir()`), while Raiden's legs and pelvis smoothly play native jump and air physics animations.
 - Ninja Run Slide Suppressed Pose: Both `Tick` and `PostTick` completely disable the gun pose, reset IK, and suppress weapon display during Ninja Run slides (`GAME_SLIDER_NINJARUN_MODE`, `GAME_IGNORE_PARKOUR_SLIDING`, and slide animation codes), ensuring clean native slide slides and kicks.
+
+
+## Current muzzle and sword attachment repair
+
+Native selector 25 retains its wp0040/0 shot effect, core/26 visible bullets and
+impact profile 1286. Only the custom rifle shot callback temporarily gives the
+native muzzle emitter the gun handle, root bone 0 and local offset (0,.01,.39).
+All modified callback fields and player ownership are restored before the pool
+continues. The native projectile/trail callback is unchanged.
+
+While aiming, the rendered gun root stays world-fixed across the native effect
+update; only body bones are restored at the beginning of each game frame. The
+original gun root is captured once and restored on aim cancellation. Restoring
+it to the native lowered pose between frames allowed attached flashes to jump
+to the legs, even when the gun itself looked correct after the visual aim pass.
+
+The cyborg body overlay excludes weapon/sheath markers 0x700, 0x701 and 0x710.
+Sword parking rigidly rebases all sword bone matrices to the sheath socket,
+including cached/world-fixed children, then restores every original matrix and
+flag before native update. Native sword constraints and draw state are untouched.
+Shared player skeleton storage is excluded from sword placement.
+
+Validation: release build (zero warnings/errors), native call/asset-table checks,
+720 pose frames including the native-effect gap and cancellation, 200 sword
+apply/restore frames and cached-child rebasing checks pass. This revision
+supersedes prior repairs. Visual confirmation remains pending.
+
+### Firing and traversal controls
+
+Hold C/LB for focused gun aim; press or hold LMB/RT to fire. Aim engages on
+press, and releasing a short untriggered aim tap retains the quick burst.
+Grounded Ninja Run can fire with aim plus a live locked target. Losing that
+target cancels gunfire. Slides, obstacle vaults, wall traversal and Ninja Run
+jumps block firing and gun poses. Ninja Run jumps stay blocked until landing,
+even if sprint is released in midair. A second check after the native update
+cancels a queued shot if traversal started during that frame; release aim
+before rearming after an interruption. Sprint and jump inputs remain native.
+
+Control regression checks: `tools\test-smg-controls.cmd`.

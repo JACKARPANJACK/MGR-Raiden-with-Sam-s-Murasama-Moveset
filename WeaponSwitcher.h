@@ -14,7 +14,9 @@
 class WeaponSwitcher
 {
     std::atomic<int> selected{0}, pending{-1};
+    std::atomic<bool> inventoryRequest{false};
     Pl0000* owner=nullptr;
+    int observedNative=-1;
     bool requested=false, previousDown=false, nextDown=false;
     unsigned requestId=0, waitTicks=0;
     unsigned previousPad=0;
@@ -52,12 +54,18 @@ public:
     static WeaponSwitcher& Get() { static WeaponSwitcher s; return s; }
     int Selected() const { return selected.load(); }
     int Pending() const { return pending.load(); }
-    void Select(int index) { if(index>=0 && index<WeaponSwitchPolicy::Count) pending=index; }
+    void Select(int index) { if(index>=0 && index<WeaponSwitchPolicy::Count) {inventoryRequest=false;pending=index;} }
+    void SelectInventory(int index) {
+        if(index>=0 && index<WeaponSwitchPolicy::Count) {
+            pending=index;inventoryRequest=true;
+            GunRuntimeLog::Write("[WeaponUI] inventory queued target=%d selected=%d native=%d",index,Selected(),g_pPlayerManager?g_pPlayerManager->getCustomWeaponEquipped():-1);
+        }
+    }
     void Forget(Pl0000* player)
     {
         if(owner!=player) return;
         DualBladeWeapon::Get().Release(player);
-        Cancel(); ReleaseWarm();pending=-1; selected=0; owner=nullptr;
+        Cancel(); ReleaseWarm();pending=-1; selected=0; owner=nullptr; observedNative=-1;
     }
     void RestoreInputs()
     {
@@ -88,36 +96,29 @@ public:
     void Tick(Pl0000* player)
     {
         if (!SamPlayerIdentity::Eligible(player)) player = nullptr;
-        if (owner!=player) { DualBladeWeapon::Get().Release(owner); Cancel(); ReleaseWarm();pending=-1; selected=0; owner=player; }
+        if (owner!=player) { DualBladeWeapon::Get().Release(owner); Cancel(); ReleaseWarm();pending=-1; selected=0; owner=player; observedNative=-1; }
         if(!player || !g_pPlayerManager) return;
         DWORD foreground=0;
         GetWindowThreadProcessId(GetForegroundWindow(),&foreground);
         const bool prev=(GetAsyncKeyState('Q')&0x8000)!=0 || (GetAsyncKeyState(VK_OEM_4)&0x8000)!=0;
         const bool next=(GetAsyncKeyState('E')&0x8000)!=0 || (GetAsyncKeyState(VK_OEM_6)&0x8000)!=0;
         auto& sam=SamMovesetManager::Instance();
+        const int nativeEquipped=g_pPlayerManager->getCustomWeaponEquipped();
+        // Native menu selection supersedes a stale queued plugin switch, even
+        // while streaming or waiting for an attack to finish.
+        if(observedNative>=0 && observedNative!=nativeEquipped)
+        { Cancel(); if(!inventoryRequest || Pending()<0)pending=-1; }
+        observedNative=nativeEquipped;
+        if(WeaponSwitchPolicy::NativeMeleeEquipped(nativeEquipped) && sam.IsEnabled())
+            sam.SetEnabled(player,false);
         // Reflect pending activation and runtime deactivation in the weapon selector.
         if(Pending()<0)
         {
-            if((sam.IsRequested() || sam.IsEnabled())) selected=WeaponSwitchPolicy::Murasama;
-            else if(Selected()==WeaponSwitchPolicy::Murasama) selected=WeaponSwitchPolicy::Sword;
-            else if(g_pPlayerManager)
-            {
-                int customEquipped = g_pPlayerManager->getCustomWeaponEquipped();
-                if(customEquipped >= 2 && customEquipped <= 5)
-                {
-                    const int targetIndex = WeaponSwitchPolicy::IndexFromCustomEquipped(customEquipped);
-                    if(Selected() != targetIndex)
-                    {
-                        if(Selected() == WeaponSwitchPolicy::DualBlades)
-                            DualBladeWeapon::Get().Release(player);
-                        selected = targetIndex;
-                    }
-                }
-                else if(customEquipped == 0 && WeaponSwitchPolicy::IsCustomWeaponIndex(Selected()))
-                {
-                    selected = WeaponSwitchPolicy::Sword;
-                }
-            }
+            const int synced=WeaponSwitchPolicy::SyncedSelection(Selected(),nativeEquipped,
+                sam.IsRequested() || sam.IsEnabled());
+            if(synced!=Selected() && Selected()==WeaponSwitchPolicy::DualBlades)
+                DualBladeWeapon::Get().Release(player);
+            selected=synced;
         }
         const bool scripted=g_StaFlags.STA_QTE||g_StaFlags.STA_EVENT||g_StaFlags.STA_CODEC||g_StaFlags.STA_SOFT_EVENT;
         if(WeaponSwitchPolicy::AcceptInput(foreground==GetCurrentProcessId()&&!gui::IsMenuVisible(),player->isAlive()!=FALSE,scripted,Trigger::StpFlags.STP_OBJ))
@@ -201,10 +202,10 @@ public:
             if(!entity) { Cancel();pending=-1;return; }
         }
         // Leaving Murasama also cancels a pending Sam activation.
-        const int previousSelected = Selected();
         if(target!=WeaponSwitchPolicy::DualBlades) DualBladeWeapon::Get().Release(player);
         if(!weapon.sam) sam.SetEnabled(player,false);
         g_pPlayerManager->setCustomWeaponEquipped(WeaponSwitchPolicy::NativeEquipped(weapon.equipped));
+        observedNative=g_pPlayerManager->getCustomWeaponEquipped();
         player->removeConstraint(5);
         reinterpret_cast<void(__thiscall*)(Pl0000*)>(shared::base+0x77D0E0)(player);
         player->field_1420=player->m_CustomWeaponBone;
@@ -232,6 +233,14 @@ public:
         {
             sam.SetEnabled(player,true);
             if(!sam.IsEnabled()) return;
+        }
+        // Match the native menu's inventory request as well as its combat slot.
+        // The manager setter only writes +E4; it does not update the native
+        // resource selection used by menu comparisons and weapon rebuilds.
+        if(target!=WeaponSwitchPolicy::DualBlades) {
+            *reinterpret_cast<int*>(shared::base+0x17E9FD8)=WeaponSwitchPolicy::NativeInventoryRequest(
+                weapon.equipped,*reinterpret_cast<int*>(shared::base+0x17EA030));
+            *reinterpret_cast<int*>(shared::base+0x19C074C)=1;
         }
         selected=target;  pending=-1; Cancel(); Warm(target);
     }

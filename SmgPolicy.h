@@ -1,8 +1,10 @@
 #pragma once
 #include <algorithm>
+#include <array>
 #include <cmath>
 #include <cstring>
 #include "GunChargePolicy.h"
+#include "PistolPolicy.h"
 #include "SamDirectionalPolicy.h"
 
 namespace SmgPolicy
@@ -43,11 +45,27 @@ namespace SmgPolicy
     inline bool ParkourClip(const char* name)
     {
         char code[5];if(!BodyMotionCode(name,code)) return false;
-        // Native wall-run / wall-slide families, including MG RAY traversal.
-        return !std::strncmp(code,"60",2) || !std::strncmp(code,"d15",3);
+        // Native animation map: low/high vaults 6090/6080, obstacle
+        // slides 6130/6131, middle vault 6110 and wall pops 6611..6613.
+        return !std::strncmp(code,"60",2) || !std::strncmp(code,"61",2) ||
+            !std::strncmp(code,"66",2) || !std::strncmp(code,"d15",3);
     }
     constexpr bool GunOverlay(bool slide,bool parkour,bool airborne,bool locomotion,bool ninjaRun)
     {return !slide && !parkour && (airborne || locomotion || ninjaRun);}
+    constexpr bool CanFire(bool neutral,bool slide,bool traversal,bool ninjaAirborne,bool ninjaRun,bool liveLock)
+    {return neutral && !slide && !traversal && !ninjaAirborne && (!ninjaRun || liveLock);}
+    struct NinjaJump
+    {
+        bool running=false,blocked=false;
+        void Reset() {running=blocked=false;}
+        bool Tick(bool ninjaRun,bool airborne,bool jump)
+        {
+            if(!airborne) blocked=false;
+            if((ninjaRun || running) && (airborne || jump)) blocked=true;
+            running=ninjaRun && !airborne;
+            return blocked;
+        }
+    };
     struct AimControl
     {
         static constexpr unsigned HoldTicks=10; // Maximum duration of a quick-fire tap.
@@ -68,7 +86,7 @@ namespace SmgPolicy
             if(requireRelease) return false;
             down=true;
             if(frames<HoldTicks) ++frames;
-            aiming=!lock && (frames>=HoldTicks || trigger);
+            aiming=!lock;
             // Lock + aim is a firing chord; releasing it must not add a tap.
             triggered=triggered || trigger || lock;
             return lock || (aiming && trigger);
@@ -101,6 +119,18 @@ namespace SmgPolicy
     constexpr unsigned EnemyMotionBank=MotionBank; // All gun clips are retargeted into Pl0010.
     constexpr unsigned Attack=0x146, LaunchAttack=0x146;
     constexpr unsigned Interval=4, Magazine=30, Reload=90, Lifetime=120, MaxShots=40;
+    struct GunProfile {
+        unsigned model,interval,muzzle;
+        const char* context;
+        float bloomStep,bloomMax,recoilKick,muzzleUp,muzzleForward;
+    };
+    inline constexpr GunProfile AssaultProfile{Gun,Interval,0,GunContext,0.015f,0.08f,0.0f,MuzzleUp,MuzzleForward};
+    inline constexpr GunProfile VectorProfile{0x30020,2,0x300,"Em0040_Smg",0.035f,0.16f,0.14f,0,0};
+    inline constexpr GunProfile PistolProfiles[]={
+        {0x32060,18,0,"Pl0010_PISTOL",.04f,.12f,.20f,.030f*PistolHandling::ModelScale,.132f*PistolHandling::ModelScale},
+        {0x32061,15,0,"Pl0010_PISTOL",.06f,.16f,.30f,.040f*PistolHandling::ModelScale,.108f*PistolHandling::ModelScale}
+    };
+    constexpr const GunProfile& Profile(unsigned gun) {return gun==0?AssaultProfile:gun==1?VectorProfile:PistolProfiles[gun<4?gun-2:0];}
     constexpr unsigned DumpInterval=2;
     constexpr unsigned ReadyHold=180, RaiseTicks=21;
     constexpr const char* IdleMotion="2e00"; // Em0010 2400: relaxed, lowered rifle stance
@@ -197,6 +227,7 @@ namespace SmgPolicy
     inline float AirComboSpeed(float speed) {return (std::max)(speed,-0.025f);}
     struct FireControl
     {
+        unsigned interval=Interval,capacity=Magazine;
         unsigned delay=0, rounds=Magazine, reload=0, queued=0, ordinal=0,burstRemaining=0;
         Move move=Burst;
         GunChargePolicy::Hold charge;
@@ -207,7 +238,7 @@ namespace SmgPolicy
         {
             if(!active) {Cancel();return;}
             if(delay) --delay;
-            if(reload && --reload==0) rounds=Magazine;
+            if(reload && --reload==0) rounds=capacity;
             // Automatic fire starts on press, not release. Cancellation still
             // requires release before rearming after menus/story interruptions.
             charge.Tick(held,true,true);
@@ -226,11 +257,32 @@ namespace SmgPolicy
         void Fired()
         {
             if(!Ready()) return;
-            --queued;rounds-=Cost(move);++ordinal;delay=Interval;
+            --queued;rounds-=Cost(move);++ordinal;delay=interval;
             if(burstRemaining) --burstRemaining;
             if(!rounds || (queued && rounds<Cost(move))) {reload=Reload;burstRemaining=0;}
         }
         void RejectUnfunded() {if(queued && !reload && rounds<Cost(move)) reload=Reload;}
+    };
+    struct FirearmLoadouts {
+        FireControl fire;
+        std::array<FireControl,4> stored{};
+        unsigned selected=0;
+        FirearmLoadouts() {Reset();}
+        bool Select(unsigned next) {
+            if(next>=stored.size() || next==selected)return false;
+            fire.Cancel();stored[selected]=fire;
+            selected=next;fire=stored[selected];
+            fire.interval=Profile(selected).interval;
+            fire.Cancel();return true;
+        }
+        void Reset() {
+            stored={};
+            for(unsigned i=0;i<stored.size();++i) {
+                stored[i].capacity=i<2?Magazine:PistolPolicy::Get(i-2).magazine;
+                stored[i].rounds=stored[i].capacity;stored[i].interval=Profile(i).interval;
+            }
+            fire=stored[selected];
+        }
     };
     inline void Configure(unsigned char* data,Move move)
     {

@@ -349,7 +349,7 @@ public:
     void AimView(gui::KunaiAimView& out) const
     { out.active=aimVisible.load();out.frames=aimFrames.load();out.targets=aimTargets.load();out.ammo=aimAmmo.load();out.recovery=aimRecovery.load();out.variant=Selected(); }
     static KunaiSubweapon& Get() { static KunaiSubweapon instance; return instance; }
-    bool IsSmgActive() const { return Selected() == KunaiPolicy::VectorSmg && observedInventorySlot == NativeSmgMenuPolicy::Slot && smg.IsEquipped(); }
+    bool IsSmgActive() const { return KunaiPolicy::GunVariant(Selected()) && NativeSmgMenuPolicy::GunSlot(observedInventorySlot) && smg.IsEquipped(); }
     SmgSubweapon& Smg() { return smg; }
     static SmgSubweapon& GetSmg() { return Get().Smg(); }
     bool Install()
@@ -451,7 +451,7 @@ public:
         launchers.Forget(player);
         // The synthetic slot is scene-owned; never leave it to an unhooked player.
         if(NativeKnifeInventory::raidenScene && SamPlayerIdentity::Eligible(g_Scene.m_pPlayer) && g_pPlayerManager &&
-            g_pPlayerManager->getSubWeaponEquipped()==NativeSmgMenuPolicy::Slot)
+            NativeSmgMenuPolicy::GunSlot(g_pPlayerManager->getSubWeaponEquipped()))
             g_pPlayerManager->setSubWeaponEquipped(0);
         electric.Reset(); burns.clear(); beforeHits.clear();
         SamMovesetManager::Instance().SetSubweaponActive(false);
@@ -500,34 +500,34 @@ public:
             pending=-1;charge.Cancel(true);releases.clear();heldAimValid=false;aimLatched=false;
         }
         selected=KunaiPolicy::InventoryVariant(Selected(),slot,NativeKnifeInventory::smgMenuReady);
-        if(slot!=NativeKnifeInventory::Slot && slot!=NativeSmgMenuPolicy::Slot) previousSlot=slot;
+        if(slot!=NativeKnifeInventory::Slot && !NativeSmgMenuPolicy::GunSlot(slot)) previousSlot=slot;
         const int choice=Pending();
         if(choice>=0 && EncounterPolicy::CanThrow(player->m_Rno0,player->isAlive()!=FALSE,
             player->isInAir()!=FALSE,Blocked(),player->isBladeModeActive()!=FALSE))
         {
-            if(choice==KunaiPolicy::VectorSmg)
+            if(KunaiPolicy::GunVariant(choice))
             {
                 if(!NativeKnifeInventory::EnsureSmg()) return;
-                if(slot!=NativeKnifeInventory::Slot && slot!=NativeSmgMenuPolicy::Slot) previousSlot=slot;
-                g_pPlayerManager->setSubWeaponEquipped(NativeSmgMenuPolicy::Slot);
+                if(slot!=NativeKnifeInventory::Slot && !NativeSmgMenuPolicy::GunSlot(slot)) previousSlot=slot;
+                g_pPlayerManager->setSubWeaponEquipped(NativeSmgMenuPolicy::SlotFor(unsigned(choice-KunaiPolicy::AssaultRifle)));
             }
             else if(choice!=KunaiPolicy::Native)
             {
                 if(!NativeKnifeInventory::Ensure() || !SamResourceManager::Instance().HeatbladesReady()) return;
-                if(slot!=NativeKnifeInventory::Slot && slot!=NativeSmgMenuPolicy::Slot) previousSlot=slot;
+                if(slot!=NativeKnifeInventory::Slot && !NativeSmgMenuPolicy::GunSlot(slot)) previousSlot=slot;
                 g_pPlayerManager->setSubWeaponEquipped(NativeKnifeInventory::Slot);
             }
-            else if(slot==NativeKnifeInventory::Slot || slot==NativeSmgMenuPolicy::Slot)
+            else if(slot==NativeKnifeInventory::Slot || NativeSmgMenuPolicy::GunSlot(slot))
                 g_pPlayerManager->setSubWeaponEquipped(
-                    previousSlot==NativeKnifeInventory::Slot || previousSlot==NativeSmgMenuPolicy::Slot ? 0 : previousSlot);
+                    previousSlot==NativeKnifeInventory::Slot || NativeSmgMenuPolicy::GunSlot(previousSlot) ? 0 : previousSlot);
             if(choice!=Selected()) {charge.Cancel(true);releases.clear();heldAimValid=false;aimLatched=false;}
             selected=choice; pending=-1;
         }
         observedInventorySlot=g_pPlayerManager->getSubWeaponEquipped();
         const bool knifeSelected=KunaiPolicy::InventorySelected(Selected(),observedInventorySlot);
-        smg.Tick(player,Selected()==KunaiPolicy::VectorSmg && observedInventorySlot==NativeSmgMenuPolicy::Slot);
+        smg.Tick(player,KunaiPolicy::GunVariant(Selected()) && NativeSmgMenuPolicy::GunSlot(observedInventorySlot),KunaiPolicy::GunVariant(Selected())?unsigned(Selected()-KunaiPolicy::AssaultRifle):0);
         launchers.Tick(player,g_pPlayerManager->getSubWeaponEquipped());
-        if(Selected()==KunaiPolicy::VectorSmg)
+        if(KunaiPolicy::GunVariant(Selected()))
         {
             charge.Cancel(true);releases.clear();heldAimValid=false;aimVisible=false;
             TickThrowPose(player,false,false);

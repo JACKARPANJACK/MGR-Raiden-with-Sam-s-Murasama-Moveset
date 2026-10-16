@@ -11,6 +11,7 @@
 #include "1-GameFileFlagCheck.h"
 #include "SamUltimatePolicy.h"
 #include "SamTemplateExecutionPolicy.h"
+#include "SwordPosePolicy.h"
 
 class SheathController
 {
@@ -29,6 +30,7 @@ private:
     float m_directSpeed=1;
     bool m_chargePose=false;
     bool m_chargeGrip=false;
+    SwordPosePolicy::VisualPark<EntityHandle,cParts,Hw::cMtx> m_temporarySword;
 
     static void Trace(const char* message)
     {
@@ -383,20 +385,57 @@ public:
         __except (EXCEPTION_EXECUTE_HANDLER) {}
     }
 
+    void RestoreTemporarySword(Pl0000* /*player*/) {
+        m_temporarySword.Restore([](Entity* sword)->cParts* {
+            auto* actor=sword->m_pBehavior;if(!actor)return nullptr;
+            auto* storage=actor->m_pParent?actor->m_pParent:actor;
+            const auto& bones=storage->m_PartsData;
+            return bones.m_ppBones?bones.m_ppBones[0]:bones.m_pBones;
+        });
+    }
     void ParkUnusedSword(Pl0000* player,bool stealthPose,bool gunPose) {
         if(!player || !player->isAlive() || player->isBladeModeActive() || g_GameStateManager.IsRoundTripActive ||
             g_StaFlags.STA_EVENT || g_StaFlags.STA_QTE || g_StaFlags.STA_CODEC || g_StaFlags.STA_SOFT_EVENT)return;
         const int weapon=g_pPlayerManager?g_pPlayerManager->getCustomWeaponEquipped():0;
-        if(weapon==6)return;
-        // Dual swords (6) actively require Raiden's katana. Native sword attacks
-        // and charged draws keep their animation-driven hand attachment.
-        if(weapon==2 || weapon==3 || weapon==4 || weapon==5 || stealthPose || gunPose) {
-            if(g_GameFunctionManager.ParkSword(player)) {
-                using Refresh=void(__thiscall*)(void*);
-                if(player->m_ppConstraints)reinterpret_cast<Refresh>(shared::base+0x69CCB0)(player->m_ppConstraints);
-                auto* sheath=player->m_pSheathEntity?player->m_pSheathEntity->m_pBehavior:nullptr;
-                if(sheath && sheath->m_ppConstraints)reinterpret_cast<Refresh>(shared::base+0x69CCB0)(sheath->m_ppConstraints);
-            }
+        // Equipping a slot does not own the sword pose. Stock custom weapons
+        // retain native attachments; dual swords disable marker updates.
+        if(SwordPosePolicy::ShouldPark(weapon,stealthPose,gunPose)) {
+            Entity* sword=player->m_SwordHandle.getEntity();
+            Entity* sheath=player->m_pSheathEntity;
+            // A native "sheathed" state does not mean its cached world-space
+            // bones followed our post-tick stealth pose. Dock every unused
+            // sword, including state zero, without changing its native state.
+            if(!sword || !sword->m_pBehavior || !sheath || !sheath->m_pBehavior)return;
+            // Gun/stealth overlays already refreshed player constraints. The
+            // sheath's child bones can still cache its previous transform.
+            // Refresh that hierarchy before sampling the socket. Re-running
+            // all player constraints here would overwrite the solved gun grip.
+            auto refreshConstraints=[](Behavior* actor) {
+                if(actor->m_ppConstraints)
+                    reinterpret_cast<void(__thiscall*)(void*)>(shared::base+0x69CCB0)(actor->m_ppConstraints);
+            };
+            auto* sheathActor=sheath->m_pBehavior;
+            (sheathActor->m_pParent?sheathActor->m_pParent:sheathActor)->updateHierarchicalTransformations();
+            refreshConstraints(sheathActor);
+            auto* root=sword->m_pBehavior->getPartsPtr(0);
+            auto* socket=sheath->m_pBehavior->getPartsPtr(SamSheathPolicy::SwordSocket(unsigned(sheath->m_ObjId)));
+            auto* storage=sword->m_pBehavior->m_pParent?sword->m_pBehavior->m_pParent:sword->m_pBehavior;
+            // Some meshes retain cached/world-fixed child matrices. Rebase the
+            // complete sword skeleton rigidly instead of moving just bone 0.
+            if(!root || !socket || storage==player || storage==player->m_pParent)return;
+            D3DXMATRIX from,inverse;std::memcpy(&from,&root->m_LocalMatrix,sizeof(from));
+            if(!D3DXMatrixInverse(&inverse,nullptr,&from))return;
+            const auto& bones=storage->m_PartsData;
+            const bool applied=m_temporarySword.ApplyParts(sword,unsigned(bones.m_BoneNum),
+                [&](unsigned i)->cParts* {return bones.m_ppBones?bones.m_ppBones[i]:bones.m_pBones?bones.m_pBones+i:nullptr;},
+                root->m_LocalMatrix,socket->m_LocalMatrix,
+                [&](const Hw::cMtx& source,const Hw::cMtx&,const Hw::cMtx& target) {
+                    D3DXMATRIX a,b,relative,world;Hw::cMtx result;
+                    std::memcpy(&a,&source,sizeof(a));std::memcpy(&b,&target,sizeof(b));
+                    D3DXMatrixMultiply(&relative,&a,&inverse);D3DXMatrixMultiply(&world,&relative,&b);
+                    std::memcpy(&result,&world,sizeof(result));return result;
+                });
+            if(applied)storage->updateHierarchicalTransformations();
         }
     }
     bool IsAttachedToHip() const { return m_bAttachedToHip; }

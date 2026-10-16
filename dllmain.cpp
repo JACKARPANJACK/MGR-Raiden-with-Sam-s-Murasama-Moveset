@@ -77,6 +77,7 @@ const char* gui::StealthDetectionStatus() {
 const char* gui::DualBladeStatus() { return DualBladeWeapon::Get().Status(); }
 int gui::PendingWeapon() { return WeaponSwitcher::Get().Pending(); }
 void gui::SelectWeapon(int index) { if (SamPlayerIdentity::Eligible(g_Scene.m_pPlayer)) WeaponSwitcher::Get().Select(index); }
+void gui::SelectInventoryWeapon(int index) { if (SamPlayerIdentity::Eligible(g_Scene.m_pPlayer)) WeaponSwitcher::Get().SelectInventory(index); }
 int gui::SelectedKunai() { return KunaiSubweapon::Get().Pending()<0 ? KunaiSubweapon::Get().Selected() : KunaiSubweapon::Get().Pending(); }
 int gui::EquippedSecondary() { return KunaiSubweapon::Get().Selected(); }
 int gui::PendingSecondary() { return KunaiSubweapon::Get().Pending(); }
@@ -172,6 +173,7 @@ static PlayerShutdown oPlayerShutdown = nullptr;
 static void __fastcall ShutdownExtendedPlayer(Pl0000* player, void*)
 {
     const bool wasCurrentPlayer = !g_Scene.m_pPlayer || g_Scene.m_pPlayer == player;
+    if(wasCurrentPlayer) SheathController::Instance().RestoreTemporarySword(player);
     WeaponSwitcher::Get().Forget(player);
     SaiPullController::Get().Forget(player);
     MonsoonKickController::Get().Forget(player);
@@ -521,6 +523,7 @@ static void __cdecl CustomTickGame()
             SamPlayerIdentity::Eligible(player))
         {
             KunaiSubweapon::GetSmg().RestoreVisualPose();
+            SheathController::Instance().RestoreTemporarySword(player);
             StealthStanceController::Get().BeforeTick(player);
             StealthCqcController::Get().BeforeTick(player);
             SamMovesetManager::Instance().UpdateSceneSafety(player);
@@ -536,6 +539,7 @@ static void __cdecl CustomTickGame()
             WeaponSwitcher::Get().ReserveUltimate(player);
         }
         else {
+            SheathController::Instance().RestoreTemporarySword(nullptr);
             StealthCqcController::Get().BeforeTick(nullptr);
             StealthStanceController::Get().BeforeTick(nullptr);
             // Restore prior Raiden owners without passing the new character into restoration.
@@ -567,9 +571,8 @@ static void __cdecl CustomTickGame()
             DualBladeWeapon::Get().PostTick(player);
             WallTraversalController::Get().PostTick(player);
             StealthStanceController::Get().PostTick(player);
-            const bool low=StealthStanceController::Get().SelectedStance()!=StealthStancePolicy::Stance::Standing;
-            const bool lowAction=StealthStancePolicy::Locomotion(player->m_Rno0) || player->m_Rno0==StealthMotionPolicy::Action || player->m_Rno0==StealthCqcPolicy::Action || (player->m_Rno0>=0x38 && player->m_Rno0<=0x3B) || player->m_Rno0==0x3D;
-            SheathController::Instance().ParkUnusedSword(player,low&&lowAction,KunaiSubweapon::GetSmg().UsesReadyPose());
+            SheathController::Instance().ParkUnusedSword(player,
+                StealthStanceController::Get().HasAppliedPose(),KunaiSubweapon::GetSmg().UsesReadyPose());
         }
     }
     __except (GunRuntimeLog::Exception(GetExceptionInformation(),"post-tick")) {}
@@ -587,6 +590,7 @@ static void InitHooks()
     NativeStealthInput::Install();
     NativeStealthWeapons::Install();
     SmgSubweapon::lowPoseCallback=[](Pl0000* p){return StealthStanceController::Get().ApplyLowGunPose(p);};
+    SmgSubweapon::pistolStanceCallback=[](){return unsigned(StealthStanceController::Get().SelectedStance());};
     WeaponSlowMotionFix::Install();
     DualBladeRuntime::Install();
     static SafeHook::Hook knifeDefinition((void*)(shared::base+0x54DFD0),
@@ -595,7 +599,9 @@ static void InitHooks()
         (void*)NativeKnifeInventory::EquippedAlias,true,(void**)&NativeKnifeInventory::originalEquippedAlias);
       static SafeHook::Hook knifeDefinitionById((void*)(shared::base+0x54DF20),
         (void*)NativeKnifeInventory::LookupDefinitionById,true,(void**)&NativeKnifeInventory::originalDefinitionById);
-    NativeSmgMenu::Install();
+    const bool weaponUiReady=NativeSmgMenu::Install();
+    GunRuntimeLog::Write("[WeaponUI] build=native-short-labels-and-inventory-commit-4 menu=%d sword=%d melee=%d message-keys=%u",
+        int(weaponUiReady),int(NativeSwordMenu::ready),int(NativeMeleeMenu::ready),NativeSmgMessagePolicy::KeyCount);
     // Native 7A4410 grenade throw release, after its ammo consumption and aim.
     if(KunaiSubweapon::Get().Install()) injector::MakeCALL(shared::base+0x7A4883,ReleaseKunai);
     // Hard reset the opt-in state

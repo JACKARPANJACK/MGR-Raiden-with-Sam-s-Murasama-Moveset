@@ -5,6 +5,9 @@ namespace gui
 {
     struct SmgView {
         unsigned rounds=0,reload=0,charge=0,status=0;
+        unsigned rifleRounds=30,vectorRounds=30;
+        unsigned pistolRounds[2]={15,12},gunIndex=0,capacity=30;
+        bool vectorGun=false;
         bool ready=false,menuLinked=false,aiming=false,locked=false,solved=false;
         float screenX=0,screenY=0;
         float spread=0;
@@ -57,6 +60,7 @@ namespace gui
     const char* DualBladeStatus();
     int PendingWeapon();
     void SelectWeapon(int index);
+    void SelectInventoryWeapon(int index);
     int SelectedKunai();
     void SelectKunai(int index);
     bool PlayTestAnimation(const char* code, char* outDetails, size_t outDetailsCap);

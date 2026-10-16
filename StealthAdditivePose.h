@@ -3,6 +3,42 @@
 #include <vector>
 namespace StealthAdditivePose {
 struct Node {int bone=-1,parent=-1;D3DXMATRIX base,reference,aim;};
+// Retarget the posed rotations onto the active costume's actual local offsets
+// and scales. Extra skinning/helper bones keep their complete native local.
+inline bool FitToNative(const std::vector<Node>& nodes,const std::vector<D3DXMATRIX>& native,
+    const std::vector<D3DXMATRIX>& posed,size_t authoredCount,std::vector<D3DXMATRIX>& result) {
+    if(native.size()!=nodes.size() || posed.size()!=nodes.size() || authoredCount>nodes.size())return false;
+    result=native;std::vector<unsigned char> done(nodes.size(),0);size_t remaining=nodes.size();
+    for(size_t pass=0;pass<nodes.size() && remaining;++pass) {
+        bool progress=false;
+        for(size_t i=0;i<nodes.size();++i) {
+            if(done[i])continue;
+            const int p=nodes[i].parent;if(p>=int(nodes.size()) || p==int(i))return false;
+            if(p>=0 && !done[p])continue;
+            D3DXMATRIX local=native[i],desired=posed[i],inverse;
+            if(p>=0) {
+                if(!D3DXMatrixInverse(&inverse,nullptr,&native[p]))return false;
+                D3DXMatrixMultiply(&local,&native[i],&inverse);
+                if(i<authoredCount) {
+                    if(!D3DXMatrixInverse(&inverse,nullptr,&posed[p]))return false;
+                    D3DXMatrixMultiply(&desired,&posed[i],&inverse);
+                }
+            }
+            if(i<authoredCount) {
+                D3DXVECTOR3 scale,position,unusedScale,desiredPosition;D3DXQUATERNION unusedRotation,rotation;
+                if(FAILED(D3DXMatrixDecompose(&scale,&unusedRotation,&position,&local)) ||
+                    FAILED(D3DXMatrixDecompose(&unusedScale,&rotation,&desiredPosition,&desired)))return false;
+                if(p<0)position=desiredPosition; // Keep authored pelvis height and crawl root.
+                D3DXQuaternionNormalize(&rotation,&rotation);
+                D3DXMatrixTransformation(&local,nullptr,nullptr,&scale,nullptr,&rotation,&position);
+            }
+            if(p>=0)D3DXMatrixMultiply(&result[i],&local,&result[p]);else result[i]=local;
+            done[i]=1;--remaining;progress=true;
+        }
+        if(!progress)break;
+    }
+    return remaining==0;
+}
 inline bool Upper(int bone) {return bone>=1 && bone<=13;}
 // Row-vector local rotations: base * inverse(reference) * aim. Translation
 // stays on the locomotion skeleton; all children inherit their posed parent.

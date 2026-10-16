@@ -104,12 +104,12 @@ public:
         // Keep controllers alive while native particles finish fading.
         pulseTicks = 0;
     }
-    void Stun(Pl0000* player, Entity* target, unsigned ticks = 90)
+    void Stun(Pl0000* player, Entity* target, unsigned ticks = 90,bool lightning=true)
     {
         if (!Ordinary(target)) return;
         auto& victim = Track(target);
         if (Hold(victim,ticks,false))
-        { Lightning(player,target,&victim.visual); victim.visualTicks=35; }
+        { if(lightning) {Lightning(player,target,&victim.visual); victim.visualTicks=35;} }
     }
     bool FinisherAvailable(Pl0000* player)
     {

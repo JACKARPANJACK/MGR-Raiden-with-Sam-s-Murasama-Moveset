@@ -23,30 +23,42 @@ namespace NativeKnifeInventory
     inline bool smgMenuReady=false;
     inline std::array<unsigned char,0x48> smgDefinition{};
     inline bool smgDefinitionReady=false;
+    inline std::array<unsigned char,0x48> vectorDefinition{};
+    inline bool vectorDefinitionReady=false;
+    inline std::array<std::array<unsigned char,0x48>,2> pistolDefinitions{};
+    inline std::array<bool,2> pistolDefinitionReady{};
     inline bool SupportedCharacter() { return SamPlayerIdentity::Eligible(g_Scene.m_pPlayer); }
 
-    inline void* SmgDefinition(void* registry)
+    inline void* SmgDefinition(void* registry,unsigned gun=0)
     {
         if(!raidenScene || !SupportedCharacter() || !smgMenuReady) return nullptr;
-        if(!smgDefinitionReady)
+        if(gun>=NativeSmgMenuPolicy::GunCount)return nullptr;
+        auto& definition=gun>=2?pistolDefinitions[gun-2]:gun==1?vectorDefinition:smgDefinition;
+        auto& ready=gun>=2?pistolDefinitionReady[gun-2]:gun==1?vectorDefinitionReady:smgDefinitionReady;
+        if(!ready)
         {
             const void* source=originalDefinition(registry,0x3800CB76); // RPG, native Type 0 gun possession.
             if(!source) return nullptr;
-            std::memcpy(smgDefinition.data(),source,smgDefinition.size());
-            auto* words=reinterpret_cast<unsigned*>(smgDefinition.data());
-            words[0]=NativeSmgMenuPolicy::ItemId; words[2]=NativeSmgMenuPolicy::Alias;
-            // Keep a native inventory object; the equipped gun uses enemy wp0020.
+            std::memcpy(definition.data(),source,definition.size());
+            auto* words=reinterpret_cast<unsigned*>(definition.data());
+            words[0]=NativeSmgMenuPolicy::ItemFor(gun);
+            words[2]=NativeSmgMenuPolicy::AliasFor(gun);
+            // Each firearm owns a distinct native inventory object.
             words[4]=1;
-            std::memset(smgDefinition.data()+0x18,0,32);
-            std::memcpy(smgDefinition.data()+0x18,"Kriss Vector SMG",16);
-            smgDefinitionReady=true;
+            std::memset(definition.data()+0x18,0,32);
+            const char* name=gun>=2?PistolPolicy::Get(gun-2).name:gun==1?"KRISS Vector SMG":"Assault Rifle";
+            std::memcpy(definition.data()+0x18,name,std::strlen(name));
+            ready=true;
         }
-        return smgDefinition.data();
+        return definition.data();
     }
 
     inline void* __fastcall LookupDefinition(void* registry,void*,unsigned alias)
     {
         void* native=originalDefinition(registry,alias);
+        if(!native)for(unsigned gun=2;gun<NativeSmgMenuPolicy::GunCount;++gun)
+            if(alias==NativeSmgMenuPolicy::AliasFor(gun))return SmgDefinition(registry,gun);
+        if(!native && alias==NativeSmgMenuPolicy::VectorAlias) return SmgDefinition(registry,true);
         if(!native && alias==NativeSmgMenuPolicy::Alias) return SmgDefinition(registry);
         if (native || alias!=Alias || !raidenScene || !SupportedCharacter()) return native;
         if (!definitionReady)
@@ -69,6 +81,9 @@ namespace NativeKnifeInventory
     inline void* __fastcall LookupDefinitionById(void* registry,void*,unsigned id)
     {
         void* native=originalDefinitionById(registry,id);
+        if(!native)for(unsigned gun=2;gun<NativeSmgMenuPolicy::GunCount;++gun)
+            if(id==NativeSmgMenuPolicy::ItemFor(gun))return SmgDefinition(registry,gun);
+        if(!native && id==NativeSmgMenuPolicy::VectorItemId) return SmgDefinition(registry,true);
         if(!native && id==NativeSmgMenuPolicy::ItemId) return SmgDefinition(registry);
         return native || id!=44 || !raidenScene || !SupportedCharacter() ? native : LookupDefinition(registry,nullptr,Alias);
     }
@@ -76,8 +91,8 @@ namespace NativeKnifeInventory
     {
         if (!SupportedCharacter()) return originalEquippedAlias();
         if(raidenScene && smgMenuReady && g_pPlayerManager &&
-            g_pPlayerManager->getSubWeaponEquipped()==NativeSmgMenuPolicy::Slot)
-            return NativeSmgMenuPolicy::Alias;
+            NativeSmgMenuPolicy::GunSlot(g_pPlayerManager->getSubWeaponEquipped()))
+            return NativeSmgMenuPolicy::AliasFor(NativeSmgMenuPolicy::IndexFor(g_pPlayerManager->getSubWeaponEquipped()));
         if (raidenScene && g_pPlayerManager && g_pPlayerManager->getSubWeaponEquipped()==Slot)
             return Alias;
         return originalEquippedAlias();
@@ -102,16 +117,16 @@ namespace NativeKnifeInventory
         item->set(Capacity);
         return Item()==item;
     }
-    inline cItemPossessionBase* SmgItem()
+    inline cItemPossessionBase* SmgItem(unsigned gun=0)
     {
         return reinterpret_cast<cItemPossessionBase*(__thiscall*)(void*,unsigned)>(shared::base+0x54E5E0)
-            (reinterpret_cast<void*>(shared::base+0x1486EA0),NativeSmgMenuPolicy::Alias);
+            (reinterpret_cast<void*>(shared::base+0x1486EA0),NativeSmgMenuPolicy::AliasFor(gun));
     }
-    inline bool EnsureSmg()
+    inline bool EnsureFirearm(unsigned gun)
     {
         if(!raidenScene || !SupportedCharacter() || !smgMenuReady || !originalDefinition) return false;
-        if(auto* item=SmgItem()) {if(!item->hasPossession()) item->set(1);return true;}
-        void* source=SmgDefinition(reinterpret_cast<void*>(shared::base+0x1486A60));
+        if(auto* item=SmgItem(gun)) {if(!item->hasPossession()) item->set(1);return true;}
+        void* source=SmgDefinition(reinterpret_cast<void*>(shared::base+0x1486A60),gun);
         if(!source) return false;
         auto* item=reinterpret_cast<cItemPossessionBase*(__cdecl*)(void*)>(shared::base+0x551C80)(source);
         if(!item) return false;
@@ -119,6 +134,8 @@ namespace NativeKnifeInventory
         auto** table=*reinterpret_cast<void***>(manager);
         reinterpret_cast<void(__thiscall*)(void*,cItemPossessionBase**)>(table[2])(manager,&item);
         item->set(1);
-        return SmgItem()==item;
+        return SmgItem(gun)==item;
     }
+    inline bool EnsureSmg() {bool ready=true;for(unsigned gun=0;gun<NativeSmgMenuPolicy::GunCount;++gun)ready=EnsureFirearm(gun) && ready;return ready;}
+
 }

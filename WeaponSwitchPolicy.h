@@ -14,7 +14,7 @@ namespace WeaponSwitchPolicy
         // Special Weapon 6 is plugin-owned; use native sword combat rather
         // than indexing the game's six-entry custom weapon tables with 6.
         {"Dual swords (wp2050) / Special Weapon 6",0x30050,6,false,false},
-        {"Murasama / Sam moveset",0,0,false,true},
+        {"Iaido katana / Sam moveset",0,0,false,true},
         {"Unarmed",0x32040,5,true,false}
     };
     constexpr int Count=sizeof(Weapons)/sizeof(Weapons[0]);
@@ -34,6 +34,17 @@ namespace WeaponSwitchPolicy
             default: return Sword;
         }
     }
+    constexpr bool NativeMeleeEquipped(int equipped)
+    { return equipped>=2 && equipped<=4; }
+    constexpr int SyncedSelection(int current,int equipped,bool samRequested)
+    {
+        // A native menu equip must take precedence over the previous style.
+        if(equipped>=2 && equipped<=5) return IndexFromCustomEquipped(equipped);
+        if(samRequested) return Murasama;
+        return current==Murasama || IsCustomWeaponIndex(current) ? Sword : current;
+    }
+    constexpr int NativeInventoryRequest(int equipped,int playerMode)
+    { return NativeEquipped(equipped) | ((playerMode==8 || playerMode==9)?int(0x80000000u):0); }
     inline int WheelSteps(int delta,int& remainder)
     {
         delta=delta>1200?1200:delta< -1200?-1200:delta;

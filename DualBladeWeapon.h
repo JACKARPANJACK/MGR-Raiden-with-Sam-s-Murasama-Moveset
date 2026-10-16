@@ -3,6 +3,7 @@
 #include "SamArchiveLookup.h"
 #include "SamConfig.h"
 #include "WeaponAttachment.h"
+#include "PistolAssets.h"
 #include <EntitySystem.h>
 #include <Pl0000.h>
 #include <cObjReadManager.h>
@@ -239,8 +240,15 @@ namespace DualBladeRuntime
     inline Data originalData=nullptr;
     inline Ref originalAddRef=nullptr,originalRemoveRef=nullptr;
     inline EntitySystem::EntityCreationData customFactory{};
+    inline std::array<EntitySystem::EntityCreationData,PistolPolicy::Count> pistolFactories{};
     inline EntitySystem::EntityCreationData* __cdecl GetFactory(unsigned id)
     {
+        if(PistolPolicy::Object(id)) {
+            auto* native=originalFactory(0x32040);
+            if(!native)return nullptr;
+            auto& factory=pistolFactories[id-PistolPolicy::Get(0).object];
+            factory=*native;factory.m_ObjectID=static_cast<eObjID>(id);return &factory;
+        }
         if(id==DualBladePolicy::WeaponObject) {
             auto* native=originalFactory(0x32040); // cPl0000Weapon
             if(!native) return nullptr;
@@ -251,6 +259,7 @@ namespace DualBladeRuntime
     }
     inline BOOL __fastcall GetData(cObjReadManager* manager,void*,Hw::cFmerge& output,eObjID id,int set)
     {
+        if(PistolPolicy::Object(unsigned(id)))return PistolAssets::Supply(unsigned(id),output)?TRUE:FALSE;
         if(static_cast<unsigned>(id)==DualBladePolicy::WeaponObject)
             return DualBladeWeapon::Get().Supply(output)?TRUE:FALSE;
         return originalData(manager,output,id,set);
@@ -258,9 +267,9 @@ namespace DualBladeRuntime
     // wp2050 bytes are plugin-owned and retained for the process lifetime.
     // Do not put this unstreamed object through native CPK reference bookkeeping.
     inline void __fastcall AddRef(cObjReadManager* manager,void*,eObjID id,int set)
-    {if(static_cast<unsigned>(id)!=DualBladePolicy::WeaponObject) originalAddRef(manager,id,set);}
+    {if(static_cast<unsigned>(id)!=DualBladePolicy::WeaponObject && !PistolPolicy::Object(unsigned(id))) originalAddRef(manager,id,set);}
     inline void __fastcall RemoveRef(cObjReadManager* manager,void*,eObjID id,int set)
-    {if(static_cast<unsigned>(id)!=DualBladePolicy::WeaponObject) originalRemoveRef(manager,id,set);}
+    {if(static_cast<unsigned>(id)!=DualBladePolicy::WeaponObject && !PistolPolicy::Object(unsigned(id))) originalRemoveRef(manager,id,set);}
     inline void Install()
     {
         static SafeHook::Hook factory((void*)(shared::base+0x68F420),(void*)GetFactory,true,(void**)&originalFactory);

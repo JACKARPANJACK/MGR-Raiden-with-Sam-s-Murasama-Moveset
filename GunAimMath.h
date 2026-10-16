@@ -63,6 +63,17 @@ namespace GunAimMath
         if(!std::isfinite(length) || length<0.000001f) return false;
         D3DXQuaternionNormalize(&quaternion,&quaternion);return true;
     }
+    inline D3DXMATRIX MuzzleLocalTransform()
+    {
+        D3DXMATRIX local;D3DXMatrixIdentity(&local);
+        local._42=SmgPolicy::MuzzleUp;local._43=SmgPolicy::MuzzleForward;
+        return local;
+    }
+    inline D3DXMATRIX MuzzleTransform(const D3DXMATRIX& barrel)
+    {
+        const auto local=MuzzleLocalTransform();D3DXMATRIX world;
+        D3DXMatrixMultiply(&world,&local,&barrel);return world;
+    }
     inline D3DXVECTOR3 Muzzle(const D3DXMATRIX& m)
     {
         return {m._41+m._21*SmgPolicy::MuzzleUp+m._31*SmgPolicy::MuzzleForward,

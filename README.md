@@ -1,5 +1,11 @@
 # Raiden with Sam's Murasama Moveset
 
+The native inventory's custom-melee category includes **Unarmed**, **Dual Swords**, and
+**Iaido katana**, alongside the original polearm, sai, pincer blades, and None.
+Iaido katana equips the Murasama / native Sam moveset. Selecting another melee
+entry restores that weapon's moveset. Inventory selections apply on returning to
+gameplay, once switching is safe and the weapon resources are loaded.
+
 Win32 ASI plugin for Metal Gear Rising: Revengeance. Selecting Murasama in the weapon selector enables the native Sam DLC
 combat controller on Raiden, including charge/Iai, Blade Mode and Datsu nodes.
 Non-2xxx DLC animations now route to Sam's motion and sequence assets, including
@@ -50,6 +56,8 @@ Full controls and move inputs: [Sam movelist](SAM_MOVELIST.md).
 - **Q / E** (also **[ / ]**): select previous / next weapon.
 - **Mouse wheel Up / Down**: previous / next weapon, including Murasama and Unarmed.
 - **D-pad**: native inventory, including the heatknife.
+- **Inventory → Sword / primary weapons → Raiden R00 HF Blade**: equip
+  Raiden's original prologue sword in normal Raiden gameplay.
 - **F7 / F8**: previous / next secondary mode; also selectable in the menu.
 - **C / controller subweapon button** with Bladewolf heatblades selected: throw.
 - **Tap F (keyboard) / click LEFT stick, L3 (controller)** with Sai equipped:
@@ -94,6 +102,14 @@ Unarmed equips custom weapon ID 5 and mounts `wp2040`, including its native
 unarmed motion/sequence, effect and sound assets. The sword and sheath stay
 attached; switching never calls the sword-lost/drop path. Enemy-contact slow
 motion now skips absent optional weapon objects safely.
+Changing weapon or subweapon slots does not force the sword onto its sheath.
+Active aiming and low stances borrow the sword attachment for one rendered frame;
+the original attachment returns before the next native update. R00 and regular
+swords keep native draw, attack, Blade Mode and scripted visibility handling.
+Gun poses transfer joint rotations onto the active costume's skeleton while
+preserving its joint offsets and scales. Aim pivots stay at each upper arm;
+costume-only deformation bones follow their posed parents. Run
+`tools\test-gun-pose.cmd` for the pose and restoration regression checks.
 Selecting Murasama enables Sam's moveset; selecting another melee weapon disables it,
 including a pending Sam activation. Q/E cycles through Murasama as
 a separate choice. Heatblades preserve Sam's moveset. Melee secondary weapons and unarmed combat use Raiden's native
@@ -143,72 +159,46 @@ or loss of focus cancel a hold. After cancellation, release C before starting a
 new charge. Normal grenades/RPGs retain native aiming and ammunition.
 These interactions, reticle alignment and projectile behavior need in-game testing.
 
-## Kriss Vector SMG secondary
+## Assault Rifle and KRISS Vector SMG
 
-Open the game's **native weapon/item selection menu**, move to secondary weapons,
-and choose **Kriss Vector SMG**, alongside the native guns and Bladewolf knives.
-Close the selection menu and press **C** to shoot. The mod's **0** menu dropdown
-and F7/F8 also equip the same inventory slot. Selecting another native secondary
-deactivates the SMG; selecting the knife restores the knife payload.
-The melee weapon stays equipped. SMG ammunition is a local 30-round magazine with an automatic
-90-gameplay-tick reload; it does not consume the native knife inventory.
+**M9 Tranq and SOCOM Mk23** are also separate secondary slots, with independent
+15/12-round magazines and heavier recoil/knockback. Tap C/LB for one round, or
+hold aim and press LMB/RT. SOCOM: hold C/LB for 0.5s or 1.5s, then release for
+an electric shot. The local MGSV meshes are provisional handgun equivalents;
+exact M9/Mk23 meshes were not found. See [pistol controls and asset limits](docs/PISTOLS.md).
 
-- **Tap C / controller subweapon**: three-round burst, auto-targeting the nearest
-  living enemy in front within 35 metres. The third round launches an ordinary
-  cyborg on a confirmed hit. Bullets fire after C release.
-- **Hold C for at least 0.5 seconds, then release**: dumps exactly 30 bullets
-  at one round every two gameplay ticks. A partially spent magazine reloads
-  first, retaining the dump request. The first round launches; the remaining
-  rounds inflict normal bullet damage. Holding never auto-fires the dump.
-- **Heavy + C**: single launcher bullet; release C before another launcher.
-- **A / D + C**: distribute fire across nearby enemies in front.
-- **Air + C**: aerial fire; confirmed bullet hits provide a small juggle impulse.
+The native secondary inventory, the **0** menu and **F7/F8** now offer two guns:
 
-Ordinary bullets inflict 4 native collision damage and launcher bullets 6,
-versus 20 for a heat knife. Native damage handles wounds and kills; projectiles
-can miss or hit scenery. Only confirmed, attributed impacts can lift ordinary
-cyborgs; bosses retain native reactions. Hit-stop freezes fire/reload timers.
-Story/QTEs, focus loss, menu opening and death cancel bursts and require C release.
+| Weapon | Model | Slot | Automatic cadence at 60 gameplay ticks/s | Handling |
+| --- | --- | --- | --- | --- |
+| Assault Rifle | Native `wp0040` rifle | 11 | One shot per 4 ticks (900 RPM) | Existing lighter recoil |
+| KRISS Vector SMG | Native `wp0020` compact gun | 12 | One shot per 2 ticks (1800 RPM) | Faster bloom buildup, higher spread ceiling and added upward visual recoil |
 
-Uses enemy `wp0020` SMG geometry and the native generic `wpb000` BulletBase
-prefab; the modeled enemy `em0046` ammunition is no longer spawned. Native
-enemy collision descriptors, trajectory and factory code are retained.
-Bullets emit after the native weapon constraint update from verified gun
-muzzle bone `0x300`, with the gun's native effect 0 providing muzzle flash.
-Ordinary neutral ground fire, including repeated taps and directional bursts,
-uses the enemy gun controller's `2200` raise, `2400` recoil and `0400` ready
-motions. The standalone native enemy spine-aim component binds to Raiden's
-own bones and tracks the acquired target; enemy AI/state objects are not cast
-onto the player. After a successful shot, neutral ground idle holds the enemy
-gun-ready stance for three seconds. Movement/attacks, jumping, weapon changes
-and the usual cancellation conditions release it. Hit-stop freezes the hold.
-The native selected-item detail panel shows **Sub machine gun**, with a separate
-KRISS Vector description explaining weak juggling bullets and the 30-round dump.
-Stock RPG descriptions stay independent. Only explicit **Heavy + C**
-chains Raiden `pl0010_2570/2571/2574/2575/2576`;
-charged/full windups use 2577/2578, followed by enemy recoil during the dump.
-Combo playback runs at 2.8x with the first shot
-timed to each clip's native action marker. Motions load from native `pl0010`
-and `em0040` banks; sequences are omitted to avoid scripted RPG/AI callbacks.
-Ongoing melee/air/Blade Mode animations continue. DMC-like pose choreography, skeletal
-compatibility, hand/muzzle alignment, native wounds/deaths and physical launch
-reactions require in-game verification. It does not supply new DMC animations.
-The mod menu reports streaming readiness, magazine, charge, reload and whether
-the native menu hooks linked successfully.
-Magdump targeting stays on one live enemy and reacquires only when it dies or
-vanishes. Switching weapons, scripted states, pause or focus loss cancels the
-remaining rounds. Spawn failures consume no ammunition.
+Each gun retains its own 30-round magazine and 90-tick automatic reload. Switching
+does not refill the previous magazine or transfer queued fire. Reload progress is
+retained while the gun is stowed and resumes when selected. Knife ammunition stays
+independent. Selecting another secondary cancels firing; the melee weapon stays
+selected. Native inventory and mod-menu selections resolve to the same gun slots.
 
-The gun registers a separate native Type 0 possession item and secondary slot 11.
-The selector uses a borrowed native gun icon and a text caption; it has no custom
-Vector icon yet. Runtime checks gate the menu hooks on the supported Win32 EXE.
-Menu arrays have eleven cells: if all ten stock secondaries are owned, the SMG
-occupies the None cell while all ten weapons remain selectable. Otherwise None
-remains available. The item is supplied each Raiden scene; teardown clears the
-synthetic equipped slot. Native menu rendering and equip transitions still need
-an in-game smoke test on the built ASI.
+Hold **C / LB** to aim, then **LMB / RT** to fire. Aim alone does not shoot.
+A quick C / LB tap releases a three-round burst at the lock target or nearest
+enemy. Lock-on plus C / LB fires juggling rounds. Slides, parkour, story states,
+menu opening, focus loss and death suppress shooting. Both guns retain the shared
+rifle-cyborg body poses; the Vector mounts to the right-hand marker and emits from
+its own muzzle bone `0x300`. The rifle keeps its left-hand grip motion and root
+muzzle offset. Ordinary bullets deal 4 damage; launcher rounds deal 6.
 
-Run `tools/test-smg.cmd` and `python tools/verify_smg_native.py 'path to game.exe'`.
+The inventory has distinct names, descriptions and MGR-style icons for both guns.
+Its three list arrays are relocated to 13 cells, retaining all ten stock entries,
+both firearms and None. Item IDs 47 and 48 have separate native possession objects.
+The selected gun's ammo appears in the menu; stock messages and icon pixels remain
+preserved. English text and icon archives build into `Release/GameData`.
+
+Run `tools/test-firearm-slots.cmd`, `tools/test-smg-controls.cmd`,
+`tools/test-gun-pose.cmd`, and `python tests/weapon_ui_assets_tests.py`.
+These check native instruction relocation, full inventory capacity, gun selection,
+fire cadence, magazines/reload, both weapon grips, restoration and asset integrity.
+Final in-game appearance, weapon switching and combat still need a gameplay check.
 
 ### RPG and Stinger aerial / charged shots
 

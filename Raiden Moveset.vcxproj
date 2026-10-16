@@ -66,6 +66,12 @@
     <ClInclude Include="framework.h" />
     <ClInclude Include="pch.h" />
     <ClInclude Include="gui.h" />
+    <ClInclude Include="PistolPolicy.h" />
+    <ClInclude Include="PistolSleep.h" />
+    <ClInclude Include="PistolNative.h" />
+    <ClInclude Include="PistolIK.h" />
+    <ClInclude Include="PistolHandling.generated.h" />
+    <ClInclude Include="PistolAssets.h" />
     <ClInclude Include="WallTraversalController.h" />
     <ClInclude Include="WallTraversalPolicy.h" />
     <ClInclude Include="WallTraversalMotion.h" />
@@ -102,6 +108,12 @@
     <ClInclude Include="KunaiSubweapon.h" />
     <ClInclude Include="NativeKnifeInventory.h" />
     <ClInclude Include="NativeSmgMenu.h" />
+    <ClInclude Include="NativeFirearmMenuStorage.h" />
+    <ClInclude Include="NativeWeaponMessages.generated.h" />
+    <ClInclude Include="NativeSwordMenu.h" />
+      <ClInclude Include="NativeMeleeMenu.h" />
+      <ClInclude Include="NativeMeleeMenuPolicy.h" />
+    <ClInclude Include="SwordPosePolicy.h" />
     <ClInclude Include="NativeSmgMenuPolicy.h" />
     <ClInclude Include="GunChargePolicy.h" />
     <ClInclude Include="NativeLauncherSubweapon.h" />

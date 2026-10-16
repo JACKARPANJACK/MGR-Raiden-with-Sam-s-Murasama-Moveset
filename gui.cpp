@@ -8,6 +8,7 @@
 #include <atomic>
 #include "injector/injector.hpp"
 #include "KunaiPolicy.h"
+#include "PistolPolicy.h"
 #include "WeaponSwitchPolicy.h"
 #include "SaiPullDiagnostics.h"
 #include "MonsoonKickPolicy.h"
@@ -119,6 +120,17 @@ static void RenderSamDebug()
     g_guiVisible=menuOpen;
     if(drawMenu)
     {
+        ImGui::TextUnformatted("Creator links / Support");
+        ImGui::TextLinkOpenURL("YouTube: youtube.com/@incinerate162", "https://www.youtube.com/@incinerate162");
+        ImGui::TextLinkOpenURL("Ko-fi: ko-fi.com/genos_kuseno", "https://ko-fi.com/genos_kuseno");
+        ImGui::TextLinkOpenURL("X / Twitter: x.com/miles_mora91146", "https://x.com/miles_mora91146");
+        ImGui::TextUnformatted("Discord: mr.demongenoscyborg");
+        ImGui::SameLine();
+        if (ImGui::SmallButton("Copy username"))
+            ImGui::SetClipboardText("mr.demongenoscyborg");
+        ImGui::Spacing();
+        ImGui::Separator();
+
         // --- Header Status ---
         if (state.active)
         {
@@ -128,7 +140,7 @@ static void RenderSamDebug()
         else
         {
             ImGui::TextColored(ImVec4(1.0f, 0.7f, 0.2f, 1.0f),
-                "=== STATUS: RAIDEN NATIVE COMBAT (Select Murasama below) ===");
+                "=== STATUS: RAIDEN NATIVE COMBAT (Select Iaido katana below) ===");
         }
 
         ImGui::Spacing();
@@ -147,7 +159,7 @@ static void RenderSamDebug()
         for(int i=0;i<WeaponSwitchPolicy::Count;++i) weaponNames[i]=WeaponSwitchPolicy::Weapons[i].name;
         int selectedWeapon=gui::PendingWeapon()<0?gui::SelectedWeapon():gui::PendingWeapon();
         if(ImGui::Combo("Weapon",&selectedWeapon,weaponNames,static_cast<int>(sizeof(weaponNames)/sizeof(*weaponNames)))) gui::SelectWeapon(selectedWeapon);
-        ImGui::TextWrapped("D-pad Down: next weapon, cycling through the full list including wp2050 dual swords. Mouse wheel Up / Down or Q / E: previous / next weapon. Sam attacks can swap in their final 6 recovery frames. Select Murasama to enable Sam's moveset.");
+        ImGui::TextWrapped("D-pad Down: next weapon, cycling through the full list including wp2050 dual swords. Mouse wheel Up / Down or Q / E: previous / next weapon. Sam attacks can swap in their final 6 recovery frames. Select Iaido katana to enable Sam's moveset. Unarmed, Dual Swords, and Iaido katana are also in the native inventory's melee category.");
         if(gui::PendingWeapon()>=0) ImGui::Text("Weapon switch queued...");
         if(gui::SelectedWeapon()==WeaponSwitchPolicy::Sai)
             ImGui::TextWrapped("Sai launcher: hold Back (S / left stick down) + press Heavy for Monsoon's kick with his native kick effect. The equipped Sai stays attached. Jump after a hit for an air follow-up.");
@@ -172,7 +184,7 @@ static void RenderSamDebug()
         if(ImGui::Checkbox("Wall traversal",&walls))gui::EnableWallTraversal(walls);
         ImGui::Text("Wall: %s | %.2fm | %.1fs",wallStatus?wallStatus:"ready",wallDistance,wallTicks/60.0f);
         ImGui::TextWrapped("Custom wallruns require a building or large barricade face. Small props and native parkour segments use regular Ninja Run. Y/secondary attack starts wallsliding: W/Up goes up, S/Down goes down, and A/D steers sideways. Z/L3 clings; X also slides. Wallruns jump over obstacles when the path and catch are clear. Jump launches away; Light Attack or F launches toward an enemy.");
-        static const char* kunaiNames[]={"Native inventory subweapon","Stun kunai","Explosive kunai","Heat-blade kunai","Bladewolf heatblades","Kriss Vector SMG"};
+        static const char* kunaiNames[]={"Native inventory subweapon","Stun kunai","Explosive kunai","Heat-blade kunai","Bladewolf heatblades","Assault Rifle","KRISS Vector SMG","M9 Tranq","SOCOM Mk23"};
         int selectedKunai=gui::SelectedKunai();
         if(ImGui::Combo("Secondary weapon##Subweapon",&selectedKunai,kunaiNames,IM_ARRAYSIZE(kunaiNames))) gui::SelectKunai(selectedKunai);
         const int equippedSecondary=gui::EquippedSecondary();
@@ -180,18 +192,20 @@ static void RenderSamDebug()
             ImGui::Text("Selected secondary: %s",kunaiNames[equippedSecondary]);
         if(gui::PendingSecondary()>=0)
             ImGui::TextWrapped("Selection queued. Close the menu to resume gameplay and equip it.");
-        if(selectedKunai==5)
+        if(KunaiPolicy::GunVariant(selectedKunai))
         {
             gui::SmgView smg;gui::GetSmgView(smg);
-            ImGui::Text("SMG: %u / 30 | reload %.1fs | charge %.1fs",smg.rounds,smg.reload/60.0f,smg.charge/60.0f);
-            const char* gunStatus[]={"inactive","unsupported game executable","loading gun assets","gun animations missing","hand attachment occupied","gun creation failed","muzzle unavailable","bullet creation failed","gun attached and ready","gun effect bank unavailable"};
-            ImGui::Text("Gun: %s",smg.status<10?gunStatus[smg.status]:"unavailable");
+            const char* gunName=smg.gunIndex>=2?PistolPolicy::Get(smg.gunIndex-2).name:smg.vectorGun?"SMG":"Assault Rifle";
+            ImGui::Text("%s: %u / %u | reload %.1fs | charge %.1fs",gunName,smg.rounds,smg.capacity,smg.reload/60.0f,smg.charge/60.0f);
+            const char* gunStatus[]={"inactive","unsupported game executable","loading gun assets","gun animations missing","hand attachment occupied","gun creation failed","muzzle unavailable","bullet creation failed","gun attached and ready","gun effect bank unavailable","pistol DAT/DTT pair missing or invalid","MGSV pistol animation package missing or invalid","pistol render meshes unavailable"};
+            ImGui::Text("Gun: %s",smg.status<13?gunStatus[smg.status]:"unavailable");
             ImGui::Text("Native secondary menu: %s",smg.menuLinked?"linked":"unavailable on this executable / hook conflict");
             ImGui::TextWrapped("RPG/Stinger-style aim: hold C / LB to aim with the crosshair; LMB / RT fires. Quick-tap C / LB for a burst at the locked or nearest enemy. Lock-on + C / LB fires juggling bullets.");
         }
+        ImGui::TextWrapped("Pistols: tap C / LB for one round, or hold aim and press LMB / RT. M9 Tranq slows ordinary cyborgs for 5 seconds without HP damage. SOCOM Mk23: hold C / LB for 0.5s or 1.5s, then release for an electric round. Each pistol owns its magazine. Holding the fire trigger does not repeat shots.");
         ImGui::TextWrapped("Gun: hold C / LB to aim; hold LMB / RT for continuous fire. Aim alone never shoots. A quick C / LB tap releases a three-round burst. Quick taps choose the locked or nearest enemy. Lock-on + C / LB fires juggling bullets without entering aim. Flick + firing sprays over a wide area. Shooting works during Ninja Run and jumps. Ninja Run retains the gun upper-body pose and native leg movement. Slides and parkour suppress the gun pose and firing. Release C / LB to leave aim and hide the gun. Empty magazines reload automatically while the rifle stays held; a held trigger resumes shooting when reloading finishes. Hits juggle airborne enemies.");
         ImGui::TextWrapped("Hold C / subweapon to precision aim. Tap: selected payload. Release after 0.3s: stun; 0.75s: explosive. Full charge at 1.5s automatically fires up to ten knives in a 90-degree fan, then cooldown. Release C before charging again. Mouse / right stick aims. Air, Blade Mode and combo throws consume one native knife per projectile.");
-        ImGui::TextWrapped("RPG / Stinger: select in the native secondary menu. Ground aiming stays native. In air, tap C to fire; hold then release at 0.5s / 1.5s for 2x / 3x native damage. Grenade/EMP/chaff/smoke slots can also be thrown in air. Uses one native rocket per successful shot. Cutscenes/QTEs, weapon changes and focus loss cancel charge. F7 / F8 chooses the knife / SMG mode.");
+        ImGui::TextWrapped("RPG / Stinger: select in the native secondary menu. Ground aiming stays native. In air, tap C to fire; hold then release at 0.5s / 1.5s for 2x / 3x native damage. Grenade/EMP/chaff/smoke slots can also be thrown in air. Uses one native rocket per successful shot. Cutscenes/QTEs, weapon changes and focus loss cancel charge. F7 / F8 cycles knife payloads, Assault Rifle and KRISS Vector SMG.");
         ImGui::TextWrapped("Runtime repair: Sam damage table, 20% faster attacks/Ninja Run, nearby-enemy targeting, timed grab impacts and bounded Round Trip hits.");
         ImGui::TextWrapped("F: Sam sweeping finisher on nearby cyborgs below 25% HP. Native executions, Zandatsu and Blade Mode charge use Sam's DLC controller. Regular hits: 12% electric stun; heavy hits: 25%, with a cooldown.");
         ImGui::Text("Next: %s%s", state.nextUltimate, state.ultimateQueued ? " (QUEUED)" : "");
@@ -393,6 +407,16 @@ void gui::OnEndScene()
         const float dotRadius = gunAim.locked ? 3.0f : 2.0f;
 
         draw->AddCircleFilled(center, dotRadius, color);
+        if(gunAim.gunIndex==3 && gunAim.charge) {
+            const float progress=(std::min)(1.0f,float(gunAim.charge)/90.0f);
+            const ImU32 electric=gunAim.charge>=30?IM_COL32(80,200,255,240):color;
+            draw->AddRectFilled(ImVec2(center.x-45,center.y+34),ImVec2(center.x+45,center.y+39),IM_COL32(20,30,40,190));
+            draw->AddRectFilled(ImVec2(center.x-45,center.y+34),ImVec2(center.x-45+90*progress,center.y+39),electric);
+            draw->AddLine(ImVec2(center.x-15,center.y+32),ImVec2(center.x-15,center.y+41),color);
+            const char* label=gunAim.charge>=90?"FULL ELECTRIC":gunAim.charge>=30?"ELECTRIC":"CHARGING";
+            const auto textSize=ImGui::CalcTextSize(label);
+            draw->AddText(ImVec2(center.x-textSize.x*.5f,center.y+44),electric,label);
+        }
         draw->AddLine(ImVec2(center.x - dynamicGap - lineLen, center.y), ImVec2(center.x - dynamicGap, center.y), color, 1.8f);
         draw->AddLine(ImVec2(center.x + dynamicGap, center.y), ImVec2(center.x + dynamicGap + lineLen, center.y), color, 1.8f);
         draw->AddLine(ImVec2(center.x, center.y - dynamicGap - lineLen), ImVec2(center.x, center.y - dynamicGap), color, 1.8f);
