@@ -63,6 +63,12 @@
 
   </ItemDefinitionGroup>
   <ItemGroup>
+    <ClInclude Include="AnimationArchive.h" />
+    <ClInclude Include="LightningSpecialPolicy.h" />
+    <ClInclude Include="CustomLightningEffects.h" />
+    <ClInclude Include="NativeLightningBank.h" />
+    <ClInclude Include="NativeLightningEffects.h" />
+    <ClInclude Include="AnimationArchiveNames.generated.h" />
     <ClInclude Include="framework.h" />
     <ClInclude Include="pch.h" />
     <ClInclude Include="gui.h" />
@@ -72,6 +78,9 @@
     <ClInclude Include="PistolIK.h" />
     <ClInclude Include="PistolHandling.generated.h" />
     <ClInclude Include="PistolAssets.h" />
+    <ClInclude Include="PistolComboPolicy.h" />
+    <ClInclude Include="PistolComboController.h" />
+    <ClInclude Include="PistolFullBodyPose.h" />
     <ClInclude Include="WallTraversalController.h" />
     <ClInclude Include="WallTraversalPolicy.h" />
     <ClInclude Include="WallTraversalMotion.h" />

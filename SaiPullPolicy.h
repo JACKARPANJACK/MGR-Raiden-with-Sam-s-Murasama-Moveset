@@ -1,5 +1,6 @@
 #pragma once
 #include <cmath>
+#include "SaiMovesetPolicy.h"
 namespace SaiPullPolicy {
     constexpr unsigned LeftStickButton = 0x1000;
     inline bool Press(bool key, bool previousKey, unsigned on, unsigned trig, unsigned previousPad) {
@@ -18,8 +19,7 @@ namespace SaiPullPolicy {
         return distance > StopDistance ? (distance - StopDistance < Speed ? distance - StopDistance : Speed) : 0;
     }
     inline bool SaiAttack(unsigned state) {
-        return state == 0x9D || state == 0x9F || state == 0xA0 || state == 0xA1 ||
-            state == 0xA3 || state == 0xA4 || state == 0xA5;
+        return SaiMovesetPolicy::GroundAttack(state);
     }
     inline bool Safe(unsigned state, bool alive, bool air, bool blade, bool scripted, bool pulling = false) {
         // Pull injects a native Sai heavy attack. Keep the victim until the

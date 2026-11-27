@@ -2,6 +2,7 @@
 #include <cstdint>
 #include <vector>
 #include <string>
+#include "LightningSpecialPolicy.h"
 
 namespace SamUltimatePolicy
 {
@@ -51,9 +52,34 @@ namespace SamUltimatePolicy
     };
     inline Move LightExtension()
     { return {"Sam template light combo extension","","9000",false,true,{"9001","9002","9003"}}; }
+    inline std::vector<unsigned> UltimateIndices = {8, 9, 13};
+    inline void EnsureLightningSpecials()
+    {
+        // Upgrade the old aerial/kick placeholders, including legacy INIs.
+        // Leave explicitly different user-authored animation mappings alone.
+        if(Moves.size()>13) {
+            if(Moves[8].raiden && Moves[8].release=="2400")Moves[8]={"Raiden thunder slice","3010","3014"};
+            if(Moves[9].raiden && Moves[9].release=="3501")Moves[9]={"Raiden lightning storm","9100","9108",false,true};
+            if(Moves[13].raiden && Moves[13].release=="2422")Moves[13]={"Raiden lightning draw slash","3000","3004"};
+        }
+        const Move specials[] = {
+            {"Chidori", "3000", "3004"},
+            {"Kirin", "3020", "3024"},
+            {"Chidori Nagashi", "9100", "9108", false, true},
+            {"Chidori Senbon", "3010", "3014"},
+            {"Double Chidori", "9100", "9101", false, true},
+            {"Chidori Sharp Spear", "3000", "3004"},
+            {"Chidori sword wave", "3010", "3014"},
+            {"MGS4 lightning discharge", "9100", "9108", false, true}
+        };
+        if(Moves.size()<28) Moves.resize(28);
+        for(unsigned i=0;i<8;++i) Moves[20+i]=specials[i];
+        for(unsigned i=20;i<28;++i)
+            if(std::find(UltimateIndices.begin(),UltimateIndices.end(),i)==UltimateIndices.end())
+                UltimateIndices.push_back(i);
+    }
     inline unsigned Count() { return Moves.size(); }
     // Boss attacks belong to directional add-ons. Only Raiden specials use X.
-    inline std::vector<unsigned> UltimateIndices = {8, 9, 13};
     inline unsigned UltimateCount() { return UltimateIndices.size(); }
     inline unsigned UltimateIndex(unsigned selection) { return UltimateCount() ? UltimateIndices[selection % UltimateCount()] : 0; }
     inline bool Attack(uint32_t state)

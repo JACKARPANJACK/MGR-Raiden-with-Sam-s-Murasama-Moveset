@@ -14,6 +14,14 @@ namespace SmgPolicy
     constexpr bool ControllerAimHeld(unsigned buttons) {return (buttons&ControllerAim)!=0;}
     inline bool ControllerFireHeld(unsigned buttons,float trigger)
     {return (buttons&ControllerFire)!=0 || (std::isfinite(trigger) && trigger>.2f);}
+    constexpr unsigned FireReservation(unsigned light,unsigned movement,bool mouseFire)
+    {return (ControllerFire | (mouseFire?Buttons(light):0u)) & ~Buttons(movement);}
+    constexpr unsigned FilterGunMouse(unsigned buttons,bool gunAim)
+    {return gunAim ? buttons&~1u : buttons;} // Native MOUSE_BTN_L.
+    constexpr bool GunLockActive(bool cameraLock,bool buttonHeld)
+    {return cameraLock || buttonHeld;}
+    constexpr bool ShotSpread(bool focused,bool locked)
+    {return !focused && !locked;}
     inline bool BodyMotionCode(const char* name,char (&code)[5])
     {
         code[0]=0;

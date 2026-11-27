@@ -26,13 +26,15 @@ class SaiPullController {
         victim = nullptr; ticks = 0; strikePending = false;queued=false;
     }
 public:
+    void Cancel() { Release(); }
+    void ObserveInput(bool key, unsigned pad) { previousKey=key; previousPad=pad; }
     void QueuePull(){queued=true;}
     static SaiPullController& Get() { static SaiPullController instance; return instance; }
     void Forget(Pl0000* player) { if (owner == player) { Release(); owner=nullptr; } }
-    void ApplyAttackInput(Pl0000* player) {
+    bool ApplyAttackInput(Pl0000* player) {
         // Native pad input has been collected by the time HandleActions runs.
         const bool requested=queued;queued=false;
-        PollInput(player,requested);
+        const bool started=PollInput(player,requested);
         if (strikePending && player == owner && Allowed(player,true)) {
             // HandleActions runs after native input/state selection. A synthetic
             // Heavy edge here cannot select an attack; enter its native action.
@@ -40,6 +42,7 @@ public:
                 player->setRno(SaiMovesetPolicy::StabbingDespair,0,0,0);
             strikePending = false;
         }
+        return started;
     }
     void Tick(Pl0000* player) {
         if (owner != player) { Release(); owner = player; }
@@ -50,7 +53,7 @@ public:
         if (Trigger::StpFlags.STP_OBJ) return;
     }
 private:
-    void PollInput(Pl0000* player, bool requested=false) {
+    bool PollInput(Pl0000* player, bool requested=false) {
         static_assert(SaiPullPolicy::LeftStickButton == Hw::PAD_BTN_L3);
         const bool key = (GetAsyncKeyState('F') & 0x8000) != 0;
         const unsigned pad = g_dbPad.m_On | g_dbPad.m_Trig;
@@ -63,11 +66,11 @@ private:
                     "Pull unavailable in this player state";
                 SaiPullDiagnostics::Report(reason,player?player->m_Rno0:0);
             }
-            Release(); return;
+            Release(); return false;
         }
-        if (Trigger::StpFlags.STP_OBJ) return;
+        if (Trigger::StpFlags.STP_OBJ) { queued=press; return false; }
         DWORD foreground = 0; GetWindowThreadProcessId(GetForegroundWindow(), &foreground);
-        if (!press || gui::IsMenuVisible() || foreground != GetCurrentProcessId()) return;
+        if (!press || gui::IsMenuVisible() || foreground != GetCurrentProcessId()) return false;
         // Choose a live whole cyborg in front of Raiden; heavy cyborgs are filtered
         // before selection so they cannot mask an eligible soldier behind them.
         Entity* best = nullptr; float distance = SaiPullPolicy::Range;
@@ -87,14 +90,15 @@ private:
         if (!best) {
             auto* nearby=SamTargets::Find(player,SaiPullPolicy::Range);
             SaiPullDiagnostics::Report("No eligible cyborg in front within 15m",player->m_Rno0,
-                nearby?unsigned(nearby->m_ObjId):0);return;
+                nearby?unsigned(nearby->m_ObjId):0);return false;
         }
-        if(distance<=SaiPullPolicy::StopDistance) {SaiPullDiagnostics::Report("Target already within reach",player->m_Rno0,unsigned(best->m_ObjId),distance);return;}
+        if(distance<=SaiPullPolicy::StopDistance) {SaiPullDiagnostics::Report("Target already within reach",player->m_Rno0,unsigned(best->m_ObjId),distance);return false;}
         victim=best;
         const auto start=best->getTransPos();dragX=start.x;dragZ=start.z;
         ticks=SaiPullPolicy::Duration;
         SaiPullDiagnostics::Report("Pull started",player->m_Rno0,unsigned(best->m_ObjId),distance);
         strikePending = true;
+        return true;
     }
 public:
     void PostTick(Pl0000* player) {

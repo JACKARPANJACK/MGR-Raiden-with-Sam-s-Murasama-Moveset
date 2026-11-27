@@ -1,5 +1,60 @@
 # Raiden with Sam's Murasama Moveset
 
+## v0.6.0-beta complete release
+
+The complete release includes **CustomSuitSlot.asi**, Raiden Remaster's required
+**MGR-Unlimiter.asi**, and the adapted suit profiles:
+MGS2 Raiden, Raiden Coat, Maiden Raiden, Sequel Raiden, Regular Fatigues,
+Raiden Sunglasses, MGS4 Raiden Alt, and Raiden Remaster. All 23 body models
+pass the Sam bone lookup and sheath checks; Sunglasses uses the shared body.
+Raiden Remaster replaces shared base bodies. In-game suit and combat verification
+remains pending, so this release is marked beta.
+
+Download the complete ZIP from [GitHub Releases](https://github.com/JACKARPANJACK/MGR-Raiden-with-Sam-s-Murasama-Moveset/releases/tag/v0.6.0-beta),
+extract into a separate folder, close the game and run `Install.cmd`.
+An existing working MGR ModLoader installation is required. The installer backs
+up replaced files, registers the included profiles, preserves their existing
+priority order, and keeps existing SamMoveset and CustomSuitSlot preferences.
+The `.sha256` asset verifies the download; `package-manifest.json` verifies payloads.
+
+Build the full bundle from the prepared game installation after building the ASI:
+
+```powershell
+python tools/build_release.py "path to game" --version v0.6.0-beta
+```
+
+The smaller `build_install_zip.py` package described below contains the moveset
+only. Use the **Complete** release asset for the adapted suits and CustomSuitSlot.
+
+Eight additional lightning specials are available in the move selector:
+Chidori, Kirin, Nagashi, Senbon, Double Chidori, Sharp Spear, sword wave and
+MGS4 lightning discharge. See [controls and implementation limits](docs/LIGHTNING_SPECIALS.md).
+
+Runtime resource overrides belong in `mods/RaidenMoveset`, with the profile enabled
+in MGR Mod Loader. Dual-blade and pistol archive reads use that folder directly.
+The ASI belongs in `scripts`. Run `tools/install.ps1 -GameDirectory "path to game"`
+after building Release Win32 to install the plugin and migrate matching moveset
+overrides out of GameData, with verified backups. `Release/GameData` is build
+staging; do not copy it into the game's GameData folder.
+
+The installer packs runtime animations into `pl/pl1c00.dat`,
+`pl/pl1c10.dat`, and `pl/pl1c20.dat` inside
+`mods/RaidenMoveset`. The ASI reads archive members directly and retains their
+bytes for native playback. No loose animation folders or directory links are
+needed. Packing checks all 34 stealth poses, 16 CQC motion/sequence/timing sets,
+Sam template clips and the base moveset pair. Installation verifies copied
+hashes and moves previous loose bundles into the backup. `SamMoveset.ini`
+belongs beside the game executable; existing settings are preserved.
+Run `tools/test-animation-banks.cmd` to verify the DAT reader, member integrity,
+pose parsing, and rejection of malformed archives.
+
+For the focused moveset/guns/CQC/stealth installer ZIP, run
+`python tools/build_install_zip.py "path to game"`. It includes only the
+RaidenMoveset ASI, its INI, and required animation, weapon and inventory resources.
+An existing MGR ModLoader installation is required. Extract the ZIP separately
+and run `Install.cmd`. Existing settings and other profiles keep their order;
+no custom skins, costume framework or unrelated runtime plugins are bundled.
+
 The native inventory's custom-melee category includes **Unarmed**, **Dual Swords**, and
 **Iaido katana**, alongside the original polearm, sai, pincer blades, and None.
 Iaido katana equips the Murasama / native Sam moveset. Selecting another melee
@@ -79,11 +134,37 @@ Full controls and move inputs: [Sam movelist](SAM_MOVELIST.md).
   selector from frame 44 after a confirmed launch or frame 64 after a miss.
   Holding the original Heavy press does not automatically repeat the kick.
 - **Sai Y / Heavy**: Stabbing Despair (Combo List 35), with native Force of
-  Magnetism (37) on the target follow-up. During throw recovery, press Y again
-  for Double Throw Stab (36). After Force of Magnetism, continue Y, Y for
-  Spin Slice (38) and Sommersault (39). In the air, Y performs Unavoidable Fate
-  (40). Extra follow-ups buffer for 24 updates and start after frame 8; each
-  step requires a fresh Heavy press.
+  Magnetism (37) on the target follow-up. The first two Heavy presses retain
+  regular native weapon behavior. Added moves start on the third fresh Heavy
+  press: Double Throw Stab (36) from the throw branch or Spin Slice (38) from
+  Force of Magnetism. Further presses advance Double Throw Stab to Spin Slice,
+  then Sommersault (39). In the air, the first Heavy performs the regular
+  native air attack; a fresh second Heavy chains into Unavoidable Fate (40).
+  Air strikes are counted separately from ground taps. This follow-up can
+  buffer through the regular air attack and is used once per jump.
+  Unavoidable Fate adds a bounded upward boost during its first 36 updates
+  (at most 2.4m of added-rise support), then restores normal falling physics.
+  Landing enters the native landing recovery and exits to normal movement;
+  an interrupted or stalled aerial action also releases its air-attack flags.
+  Idle, damage, Light,
+  a successful pull, a launcher or switching weapons resets the press count.
+  Holding Heavy does not count as another press.
+  Follow-ups buffer through startup; each step requires a fresh Heavy
+  press. Native throw follow-ups open at frame 20, Double Throw Stab at update
+  48, and Spin Slice at update 36. Custom move timing continues across native
+  animation subphases, including Spin Slice's airborne section.
+  These moves share the pull and launcher chain: F / L3 pulls during grounded
+  Sai attacks (including Force of Magnetism), and Back + Heavy branches from
+  Double Throw Stab, Spin Slice, Sommersault or either throw recovery into
+  Monsoon's launcher when the move's follow-up window opens (frame 8 for native
+  throw recovery). Starting the launcher ends the drag and
+  clears any queued combo tap. Back + Y during Sommersault buffers until its
+  grounded recovery, then starts the launcher. With no follow-up, Sommersault
+  returns to idle or free-fall. Jump out of the launcher's recovery, then use
+  mid-air Y, Y for the regular air Heavy followed by Unavoidable Fate.
+  Heavy or F / L3 out of the launcher's recovery returns
+  to the ground Sai attack or pull. A successful pull takes priority over a
+  combo follow-up in the same update and clears the earlier buffered Y.
 - **F** in Sam mode: sweeping finisher against a nearby weak cyborg.
 - **X** or **controller B / Circle** in Sam mode: queue the next lightning ultimate.
 - Directional Light/Heavy and flick inputs add boss attacks; see

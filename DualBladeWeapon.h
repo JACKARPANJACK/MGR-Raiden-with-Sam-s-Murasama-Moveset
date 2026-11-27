@@ -38,9 +38,9 @@ class DualBladeWeapon
     {
         if(loaded) return true;
         std::string path=SamConfig::GetIniPath();path.resize(path.find_last_of("\\/")+1);
-        path+="GameData\\wp\\wp2050.dat";
+        path+="mods\\RaidenMoveset\\wp\\wp2050.dat";
         FILE* file=nullptr;
-        if(fopen_s(&file,path.c_str(),"rb") || !file) {Report("wp2050 ERROR: GameData/wp/wp2050.dat missing");return false;}
+        if(fopen_s(&file,path.c_str(),"rb") || !file) {Report("wp2050 ERROR: mods/RaidenMoveset/wp/wp2050.dat missing");return false;}
         fseek(file,0,SEEK_END);long size=ftell(file);rewind(file);
         if(size<32 || size>32*1024*1024) {fclose(file);Report("wp2050 ERROR: invalid archive size");return false;}
         data.resize(size);bool ok=fread(data.data(),1,size,file)==static_cast<size_t>(size);fclose(file);

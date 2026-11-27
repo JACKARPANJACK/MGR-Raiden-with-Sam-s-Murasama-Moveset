@@ -7,6 +7,8 @@
 #include <random>
 #include <cmath>
 #include "SamElectricPolicy.h"
+#include "LightningSpecialPolicy.h"
+#include "NativeLightningEffects.h"
 #include "SamBalancePolicy.h"
 #include "SamTargets.h"
 #include "SamVisualEffects.h"
@@ -84,6 +86,55 @@ class SamElectricCombat
         return false;
     }
 public:
+    void SpecialCharge(Pl0000* player,unsigned move)
+    {
+        if(!player || !player->m_pEntity) return;
+        NativeLightningEffects::Get().Charge(player,move);
+    }
+    // Each pulse visits a bounded set of live enemies once. Bosses receive
+    // capped damage/particles, but only ordinary cyborgs can be stunned.
+    unsigned SpecialPulse(Pl0000* player,unsigned move)
+    {
+        if(!player || !player->m_pEntity) return 0;
+        const auto spec=LightningSpecialPolicy::Get(move);
+        if(!spec.pulses) return 0;
+        auto origin=player->m_pEntity->getTransPos();
+        Entity* releaseAnchor=nullptr;
+        if(spec.shape==LightningSpecialPolicy::TargetBurst) {
+            Entity* target=SamTargets::Find(player,spec.range);
+            // A miss still shows the skybolt eight metres in front of Raiden.
+            // Only a real target permits the damage burst below.
+            NativeLightningEffects::Get().Release(player,move,target);
+            if(!target) return 0;
+            origin=target->getTransPos();
+            releaseAnchor=target;
+        }
+        if(spec.shape!=LightningSpecialPolicy::TargetBurst)
+            NativeLightningEffects::Get().Release(player,move,releaseAnchor);
+        const float sn=std::sin(player->m_Rot.y),cs=std::cos(player->m_Rot.y);
+        unsigned hits=0;
+        auto& list=g_EntitySystem.getEntityList(); auto it=list.begin();
+        const unsigned count=unsigned((std::max)(0,(std::min)(8192,list.getSize())));
+        for(unsigned i=0;i<count && it!=Hw::cFixedList<Entity*>::iterator{} && hits<spec.targets;++i,++it) {
+            Entity* target=*it;
+            if(!SamTargets::Enemy(target)) continue;
+            const auto p=target->getTransPos();
+            const float dx=p.x-origin.x,dy=p.y-origin.y,dz=p.z-origin.z;
+            auto area=spec;
+            if(spec.shape==LightningSpecialPolicy::TargetBurst) {area.shape=LightningSpecialPolicy::Radial;area.range=spec.width;}
+            if(!LightningSpecialPolicy::Contains(area,dx*cs-dz*sn,dy,dx*sn+dz*cs)) continue;
+            ++hits;
+            auto& v=Track(target);
+            if(v.visualTicks) v.visual.FadeUnits(1,0);
+            NativeLightningEffects::Get().Impact(target);
+            auto* enemy=static_cast<BehaviorAppBase*>(target->m_pBehavior);
+            const int native=reinterpret_cast<int(__thiscall*)(Pl0000*,int)>(shared::base+0x77ED30)(player,12);
+            const int damage=LightningSpecialPolicy::Damage(native,enemy->m_HpMax,spec.pulses);
+            if(damage>0) enemy->damage(damage,false);
+            if(Ordinary(target)) Hold(v,spec.stun,false);
+        }
+        return hits;
+    }
     // Build the same native effect descriptor as an EffectTrack, with an
     // explicit resource bank. This works on enemies without casting to Pl0000.
     static void Lightning(Pl0000* player, Entity* anchor, cEspControler* controller)
@@ -95,6 +146,7 @@ public:
     }
     void Reset()
     {
+        NativeLightningEffects::Get().Clear();
         for (auto& v : victims)
         {
             Release(*v);

@@ -1,10 +1,12 @@
 #pragma once
 #include "MonsoonKickPolicy.h"
+#include "AnimationArchive.h"
 #include "SamAttackInputPolicy.h"
 #include "SamArchiveLookup.h"
 #include "WeaponSwitcher.h"
 #include "SaiPullPolicy.h"
 #include "SaiPullController.h"
+#include "SaiMovesetController.h"
 #include "GunRuntimeLog.h"
 #include "MonsoonKickEffects.h"
 #include <vector>
@@ -17,6 +19,7 @@ class MonsoonKickController {
     SamAttackInputPolicy::Reader input;
     SamAttackInputPolicy::Reader cancelInput;
     MonsoonKickPolicy::CancelBuffer cancel;
+    MonsoonKickPolicy::SommersaultBuffer somersaultCancel;
     bool sampled=false,handedOff=false,hitConfirmed=false,previousPullKey=false;
     unsigned previousPullPad=0,reservedMask=0;
     unsigned savedOn=0,savedTrig=0,savedRep=0,savedPadOn=0,savedPadTrig=0,savedPadRep=0;
@@ -26,20 +29,16 @@ class MonsoonKickController {
     int attackIdentity=-1;
     unsigned preAction=0;
     bool preAir=false;
+    bool preInitialized=false;
+    float preFrame=0;
     bool LoadFile(const char* name, std::vector<char>& bytes) {
-        std::string path = SamConfig::GetIniPath();
-        path.resize(path.find_last_of("\\/")+1);
-        path += "scripts\\BaseMoveset\\"; path += name;
-        FILE* file = nullptr;
-        if (fopen_s(&file,path.c_str(),"rb") || !file) return false;
-        fseek(file,0,SEEK_END);const long size=ftell(file);rewind(file);
-        if(size<16 || size>8*1024*1024) {fclose(file);return false;}
-        bytes.resize(size);const bool ok=fread(bytes.data(),1,size,file)==size;
-        fclose(file);if(!ok)bytes.clear();return ok;
+        auto data=AnimationArchive::Read("pl1c20",name);
+        bytes.assign(data.begin(),data.end());
+        return bytes.size()>=16;
     }
     bool Load() {
         if(!motion.empty() && !sequence.empty()) return true;
-        if(!LoadFile("monsoon_kick.mot",motion) || !LoadFile("monsoon_kick_seq.bxm",sequence) ||
+        if(!LoadFile("pl1c20_2f00.mot",motion) || !LoadFile("pl1c20_2f00_0_seq.bxm",sequence) ||
            std::memcmp(motion.data(),"mot\0",4) ||
            (std::memcmp(sequence.data(),"XML\0",4) && std::memcmp(sequence.data(),"BXM\0",4))) {
             motion.clear();sequence.clear();return false;
@@ -91,7 +90,7 @@ public:
         g_dbPad.m_Rep=(g_dbPad.m_Rep&~reservedMask)|savedPadRep;
         reservedMask=0;
     }
-    void Forget(Pl0000* player) {if(owner==player){RestoreCancelInputs(player);cancel.Clear();cancelInput.Reset();MonsoonKickEffects::Get().Stop();owner=nullptr;ticks=0;input.Reset();targets.clear();}}
+    void Forget(Pl0000* player) {if(owner==player){RestoreCancelInputs(player);cancel.Clear();somersaultCancel.Clear();cancelInput.Reset();MonsoonKickEffects::Get().Stop();owner=nullptr;ticks=0;input.Reset();targets.clear();}}
     // Called before native action selection, after CurrentInput collection.
     void SampleNativeInput(Pl0000* player) {
         if(player!=owner || sampled)return;sampled=true;
@@ -101,6 +100,10 @@ public:
         const bool pull=SaiPullPolicy::Press(key,previousPullKey,g_dbPad.m_On,g_dbPad.m_Trig,previousPullPad);
         previousPullKey=key;previousPullPad=g_dbPad.m_On|g_dbPad.m_Trig;
         if(!Active(player)){cancel.Clear();return;}
+        // Pull does not run its normal handler while the kick owns the action.
+        // Track held F/L3 here so an expired kick cancel cannot become a new
+        // pull later. Accepted cancels use QueuePull to replay exactly once.
+        SaiPullController::Get().ObserveInput(key,previousPullPad);
         DWORD foreground=0;GetWindowThreadProcessId(GetForegroundWindow(),&foreground);
         if(!player->isAlive() || player->isInAir() || player->isBladeModeActive() || gui::IsMenuVisible() ||
            foreground!=GetCurrentProcessId() || g_StaFlags.STA_PAUSE || g_StaFlags.STA_QTE ||
@@ -133,9 +136,11 @@ public:
     }
     void BeforeTick(Pl0000* player) {
         sampled=false;handedOff=false;
-        if(!player) {targets.clear();return;}
+        if(!player) {targets.clear();somersaultCancel.Clear();return;}
         preAction=player->m_Rno0;
         preAir=player->isInAir()!=FALSE;
+        preInitialized=player->m_Rno1!=0;
+        preFrame=SaiMovesetController::Get().TransitionFrame(player);
         if(SupportedWeapon())MonsoonKickEffects::Get().Update();
         if(!Active(player)) {cancel.Clear();targets.clear();MonsoonKickEffects::Get().Stop();return;}
         auto& list=g_EntitySystem.getEntityList();auto it=list.begin();
@@ -176,7 +181,7 @@ public:
         }
     }
     bool HandleAction(Pl0000* player) {
-        if(owner!=player) {owner=player;ticks=0;input.Reset();}
+        if(owner!=player) {owner=player;ticks=0;input.Reset();somersaultCancel.Clear();}
         const bool active=player->m_Rno0==MonsoonKickPolicy::Action;
         DWORD foreground=0;GetWindowThreadProcessId(GetForegroundWindow(),&foreground);
         const bool scripted=g_StaFlags.STA_QTE||g_StaFlags.STA_EVENT||g_StaFlags.STA_CODEC||g_StaFlags.STA_SOFT_EVENT;
@@ -209,12 +214,22 @@ public:
         if(a||d||w||s){x=float(d)-float(a);y=float(w)-float(s);}
         const unsigned startState=MonsoonKickPolicy::StartState(player->m_Rno0,preAction,player->m_Rno1==0,SaiEquipped());
         const bool airborne=startState!=player->m_Rno0 ? preAir : player->isInAir()!=FALSE;
+        const bool initialized=startState!=player->m_Rno0 ? preInitialized : player->m_Rno1!=0;
+        const float frame=startState!=player->m_Rno0 ? preFrame : SaiMovesetController::Get().TransitionFrame(player);
+        bool bufferedKick=false;
+        if(scripted || g_StaFlags.STA_PAUSE || gui::IsMenuVisible() || foreground!=GetCurrentProcessId() ||
+           !SupportedWeapon() || !player->isAlive() || player->isBladeModeActive())somersaultCancel.Clear();
+        else bufferedKick=somersaultCancel.Poll(startState,frame,initialized,airborne,
+            attack.heavy,attack.light||attack.lightHeld,
+            SamDirectionalPolicy::Resolve(x,y)==SamDirectionalPolicy::Back,Trigger::StpFlags.STP_OBJ);
         if(attack.heavy && SaiEquipped())
             GunRuntimeLog::Write("[MonsoonKick] heavy input state=%X prior=%X phase=%u resolved=%X air=%u preAir=%u light=%u direction=%.2f,%.2f selected=%d",
                 player->m_Rno0,preAction,player->m_Rno1,startState,unsigned(airborne),unsigned(preAir),
                 unsigned(attack.light||attack.lightHeld),x,y,WeaponSwitcher::Get().Selected());
         if(!MonsoonKickPolicy::CanStart(startState,player->isAlive()!=FALSE,airborne,
-            player->isBladeModeActive()!=FALSE,blocked,SupportedWeapon(),attack.heavy,attack.light||attack.lightHeld,x,y) || !Load()) return false;
+            player->isBladeModeActive()!=FALSE,blocked,SupportedWeapon(),attack.heavy||bufferedKick,attack.light||attack.lightHeld,
+            bufferedKick?0:x,bufferedKick?-1:y,
+            initialized,frame) || !Load()) return false;
         if(!MonsoonKickEffects::Get().Update()) {MonsoonKickPolicy::Status="Loading Monsoon kick effects; press Back + Heavy again";return false;}
         player->m_CurrentInput.m_Trig&=~player->m_ButtonHeavyAttack;
         player->setRno(MonsoonKickPolicy::Action,0,0,0);ticks=0;hitConfirmed=false;cancel.Clear();
@@ -230,6 +245,8 @@ public:
         const int result=player->requestAnimationByName(MonsoonKickPolicy::Code,0,0.08f,1,
             0x8000000,0,1.35f);
         if(result==-1){MonsoonKickPolicy::Status="Kick animation could not start";player->setRno(0,0,0,0);return false;}
+        SaiMovesetController::Get().Reset();
+        SaiPullController::Get().Cancel();
         ShowSai(player);
         MonsoonKickEffects::Get().Play(player);
         MonsoonKickPolicy::Status="Kick started: aim the rising foot at a nearby enemy";

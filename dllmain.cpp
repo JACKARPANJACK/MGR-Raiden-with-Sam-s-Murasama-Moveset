@@ -11,6 +11,10 @@
 #include "SaiMovesetController.h"
 #include "MonsoonKickController.h"
 #include "KunaiSubweapon.h"
+#include "PistolGunFuFeature.h"
+#if MGR_ENABLE_PISTOL_GUNFU
+#include "PistolComboController.h"
+#endif
 #include "NativeSmgMenu.h"
 #include "WeaponSlowMotionFix.h"
 #include "SamDlcRouting.h"
@@ -177,6 +181,9 @@ static void __fastcall ShutdownExtendedPlayer(Pl0000* player, void*)
     WeaponSwitcher::Get().Forget(player);
     SaiPullController::Get().Forget(player);
     MonsoonKickController::Get().Forget(player);
+#if MGR_ENABLE_PISTOL_GUNFU
+    PistolComboController::Get().Forget(player);
+#endif
     SaiMovesetController::Get().Forget(player);
     WallTraversalController::Get().Forget(player);
     KunaiSubweapon::GetSmg().RestoreVisualPose();
@@ -206,6 +213,15 @@ typedef int(__thiscall* Behavior_RequestAnimationByName_t)(Behavior* pThis, cons
     float interpolation, float weight, unsigned int flags, float startFrame, float playbackSpeed);
 static Behavior_RequestAnimationByName_t oBehavior_RequestAnimationByName = nullptr;
 
+using AnimationByData=int(__thiscall*)(Behavior*,Hw::cFmerge*,unsigned,int,float,float,unsigned,float,float);
+static AnimationByData oAnimationByData=nullptr;
+static int __fastcall Custom_AnimationByData(Behavior* actor,void*,Hw::cFmerge* bank,
+    unsigned index,int node,float interpolation,float weight,unsigned flags,float start,float speed)
+{
+    return oAnimationByData(actor,bank,SaiMovesetController::Get().MapMotion(actor,index),
+        node,interpolation,weight,flags,start,speed);
+}
+
 // Motion lookup uses hashed archive entries, not cFmerge::getFileNameData.
 // Sequence lookup is a separate Behavior call using a temporary archive copy.
 using Animation_FindMotion_t = void* (__thiscall*)(Animation*, const char*);
@@ -217,7 +233,7 @@ static Animation_RequestSequence_t oAnimation_RequestSequence = nullptr;
 
 struct PlayerAnimationRequest : SamCombatRouting::RequestClip
 {
-    enum class Owner : unsigned char { None, SamMoveset, DualBlades, Gun, MonsoonKick, Cqc };
+    enum class Owner : unsigned char { None, SamMoveset, DualBlades, Gun, MonsoonKick, Cqc, PistolCombo };
     Behavior* actor = nullptr;
     int mapId = -1;
     Owner owner = Owner::None;
@@ -259,6 +275,9 @@ static bool IsAnimationRequestActive(const PlayerAnimationRequest* request)
     case PlayerAnimationRequest::Owner::Gun: return IsGunPlayer(request->actor);
     case PlayerAnimationRequest::Owner::MonsoonKick: return MonsoonKickController::Get().Active(request->actor);
     case PlayerAnimationRequest::Owner::Cqc: return StealthCqcController::Get().Active(request->actor);
+#if MGR_ENABLE_PISTOL_GUNFU
+    case PlayerAnimationRequest::Owner::PistolCombo: return PistolComboController::Get().Active(request->actor);
+#endif
     default: return false;
     }
 }
@@ -386,7 +405,13 @@ static int __fastcall Custom_Behavior_RequestAnimationByName(Behavior* pThis, vo
     const bool kick = MonsoonKickController::Get().Active(pThis) && anim && !std::strcmp(anim,MonsoonKickPolicy::Code);
     const auto cqcClip=StealthCqcController::Get().RequestedClip(pThis,anim);
     const bool cqc=cqcClip.motion && cqcClip.sequence;
-    request.actor = (active || dual || gun || kick || cqc) ? pThis : nullptr;
+#if MGR_ENABLE_PISTOL_GUNFU
+    const auto pistolClip=PistolComboController::Get().RequestedClip(pThis,anim);
+#else
+    const SamArchiveLookup::Clip pistolClip{};
+#endif
+    const bool pistolCombo=pistolClip.motion && pistolClip.sequence;
+    request.actor = (active || dual || gun || kick || cqc || pistolCombo) ? pThis : nullptr;
     request.mapId = s_animationMapId;
     if(kick) {
         request.owner=PlayerAnimationRequest::Owner::MonsoonKick;
@@ -396,6 +421,10 @@ static int __fastcall Custom_Behavior_RequestAnimationByName(Behavior* pThis, vo
     }
     if(cqc) {
         request.owner=PlayerAnimationRequest::Owner::Cqc;request.clip=cqcClip;
+        std::memcpy(request.code,anim,4);std::memcpy(request.samCode,anim,4);
+    }
+    if(pistolCombo) {
+        request.owner=PlayerAnimationRequest::Owner::PistolCombo;request.clip=pistolClip;
         std::memcpy(request.code,anim,4);std::memcpy(request.samCode,anim,4);
     }
     if (dual) {
@@ -421,7 +450,7 @@ static int __fastcall Custom_Behavior_RequestAnimationByName(Behavior* pThis, vo
     // finishers and Datsu. Resolve their DLC pair without combat remapping.
     const bool samNativeClip=SamDlcRouting::Code(bladeCode,anim,nativeSam,
         nativeSam?g_Scene.m_pPlayer->m_Rno0:0,nativeSam&&g_Scene.m_pPlayer->isBladeModeActive());
-    if (active && (SamCombatRouting::CodeFromRequest(anim) ||
+    if (!pistolCombo && active && (SamCombatRouting::CodeFromRequest(anim) ||
         (nativeSam && SamCombatRouting::IsNativeAirTransition(anim)) ||
         samNativeClip))
     {
@@ -460,7 +489,7 @@ static int __fastcall Custom_Behavior_RequestAnimationByName(Behavior* pThis, vo
         }
     }
     PlayerAnimationRequest* previousRequest = s_animationRequest;
-    s_animationRequest = (active || dual || gun || kick || cqc) ? &request : nullptr;
+    s_animationRequest = (active || dual || gun || kick || cqc || pistolCombo) ? &request : nullptr;
     if (active)
         SamMovesetManager::Instance().TraceRequest(anim);
     int result = 0;
@@ -468,7 +497,7 @@ static int __fastcall Custom_Behavior_RequestAnimationByName(Behavior* pThis, vo
     {
         if (oBehavior_RequestAnimationByName)
             result = oBehavior_RequestAnimationByName(pThis, anim, node, interpolation,
-                weight, flags, startFrame, active && SamCombatRouting::IsCombatCode(anim) &&
+                weight, flags, startFrame, !pistolCombo && active && SamCombatRouting::IsCombatCode(anim) &&
                     !g_Scene.m_pPlayer->isBladeModeActive() ? playbackSpeed*SamBalancePolicy::AttackSpeed : playbackSpeed);
     }
     __finally
@@ -485,13 +514,22 @@ static void __fastcall Custom_Pl0000_HandleActions(Pl0000* pThis, void* edx)
 {
     const bool raiden = pThis == g_Scene.m_pPlayer && SamPlayerIdentity::Eligible(pThis);
     if(raiden)StealthStanceController::Get().FilterNativeInput(pThis);
+#if MGR_ENABLE_PISTOL_GUNFU
+    if(raiden&&PistolComboController::Get().HandleAction(pThis))return;
+#endif
     if(raiden&&WallTraversalController::Get().HandleAction(pThis))return;
     if(raiden&&StealthCqcController::Get().HandleAction(pThis))return;
     if(raiden&&StealthStanceController::Get().HandleAction(pThis))return;
     if(raiden&&MonsoonKickController::Get().HandleAction(pThis))return;
     if(raiden) {
-        SaiMovesetController::Get().ApplyAttackInput(pThis);
-        SaiPullController::Get().ApplyAttackInput(pThis);
+        // A successful pull owns this press. Do not also spend a buffered Y
+        // on a combo transition in the same update.
+        if(SaiPullController::Get().ApplyAttackInput(pThis)) {
+            SaiMovesetController::Get().Reset();
+            pThis->m_CurrentInput.m_Trig&=~pThis->m_ButtonHeavyAttack;
+        }
+        else SaiMovesetController::Get().ApplyAttackInput(pThis);
+        if(SaiMovesetController::Get().HandleAction(pThis,oPl0000_HandleActions))return;
     }
     if (raiden)
         SamMovesetManager::Instance().RecordActionHandler("raiden");
@@ -533,6 +571,7 @@ static void __cdecl CustomTickGame()
             WeaponSwitcher::Get().Tick(player);
             DualBladeWeapon::Get().Tick(player);
             SaiPullController::Get().Tick(player);
+            SaiMovesetController::Get().BeforeTick(player);
             MonsoonKickController::Get().BeforeTick(player);
             KunaiSubweapon::Get().Tick(player);
             SamMovesetManager::Instance().OnTick(player);
@@ -547,6 +586,7 @@ static void __cdecl CustomTickGame()
             WeaponSwitcher::Get().Tick(nullptr);
             DualBladeWeapon::Get().Tick(nullptr);
             SaiPullController::Get().Tick(nullptr);
+            SaiMovesetController::Get().BeforeTick(nullptr);
             MonsoonKickController::Get().BeforeTick(nullptr);
             KunaiSubweapon::Get().Tick(nullptr);
             NativeKnifeInventory::raidenScene = false;
@@ -565,12 +605,16 @@ static void __cdecl CustomTickGame()
         auto* player = g_Scene.m_pPlayer;
         if (SamPlayerIdentity::Eligible(player)) {
             SamMovesetManager::Instance().PostTick(player);
-            KunaiSubweapon::Get().PostTick(player);
+            NativeLightningEffects::Get().Tick(player);
             SaiPullController::Get().PostTick(player);
+            SaiMovesetController::Get().PostTick(player);
             MonsoonKickController::Get().PostTick(player);
             DualBladeWeapon::Get().PostTick(player);
             WallTraversalController::Get().PostTick(player);
             StealthStanceController::Get().PostTick(player);
+            // Gun-fu owns the final full-body pose. Mount and emit only after
+            // every stance/traversal/melee visual layer has finished.
+            KunaiSubweapon::Get().PostTick(player);
             SheathController::Instance().ParkUnusedSword(player,
                 StealthStanceController::Get().HasAppliedPose(),KunaiSubweapon::GetSmg().UsesReadyPose());
         }
@@ -591,6 +635,10 @@ static void InitHooks()
     NativeStealthWeapons::Install();
     SmgSubweapon::lowPoseCallback=[](Pl0000* p){return StealthStanceController::Get().ApplyLowGunPose(p);};
     SmgSubweapon::pistolStanceCallback=[](){return unsigned(StealthStanceController::Get().SelectedStance());};
+#if MGR_ENABLE_PISTOL_GUNFU
+    SmgSubweapon::pistolAttackActiveCallback=[](Pl0000* p){return PistolComboController::Get().Active(p);};
+    SmgSubweapon::pistolAttackPoseCallback=[](Pl0000* p,float& frame){return PistolComboController::Get().VisualPose(p,frame);};
+#endif
     WeaponSlowMotionFix::Install();
     DualBladeRuntime::Install();
     static SafeHook::Hook knifeDefinition((void*)(shared::base+0x54DFD0),
@@ -640,6 +688,9 @@ static void InitHooks()
         true,
         (void**)&oBehavior_RequestAnimationByMap
     );
+
+    static SafeHook::Hook saiWeaponMotion((void*)(shared::base+0x69F3C0),
+        (void*)Custom_AnimationByData,true,(void**)&oAnimationByData);
 
     static SafeHook::Hook g_hookBehavior_RequestAnimationByName(
         (void*)(shared::base + 0x69E290),

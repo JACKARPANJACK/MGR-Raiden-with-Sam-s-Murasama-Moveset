@@ -5,6 +5,7 @@
 #include <CharacterControl.h>
 #include "SamTemplateExecutionPolicy.h"
 #include "SamStagePolicy.h"
+#include "AnimationArchive.h"
 #include "SamBossSequence.h"
 #include "SheathController.h"
 #include <map>
@@ -27,21 +28,13 @@ class SamTemplateExecution
 
     static std::vector<unsigned char> Read(const std::string& name)
     {
-        char exe[MAX_PATH]{};GetModuleFileNameA(nullptr,exe,MAX_PATH);
-        char* slash=std::strrchr(exe,'\\');if(!slash)return {};
-        *slash=0;const std::string path=std::string(exe)+"\\scripts\\SamTemplateAnims\\"+name;
-        FILE* file=nullptr;fopen_s(&file,path.c_str(),"rb");if(!file)return {};
-        std::fseek(file,0,SEEK_END);const long size=std::ftell(file);std::rewind(file);
-        if(size<=0 || size>4*1024*1024){std::fclose(file);return {};}
-        std::vector<unsigned char> data(size);
-        const bool ok=std::fread(data.data(),1,data.size(),file)==data.size();std::fclose(file);
-        return ok ? data : std::vector<unsigned char>{};
+        return AnimationArchive::Read("pl1c10",name);
     }
     Clip* Load(const char* side,const char* code)
     {
-        const std::string key=std::string(side)+"_"+code;
+        const std::string key=std::string(std::strcmp(side,"attacker")==0?"pl1c10":"pl1c11")+"_"+code;
         auto it=clips.find(key);if(it!=clips.end())return &it->second;
-        Clip clip{Read(key+".mot"),Read(key+"_seq.bxm")};
+        Clip clip{Read(key+".mot"),Read(key+"_0_seq.bxm")};
         if(clip.motion.size()<12 || !SamStagePolicy::Length(clip.motion.data()) ||
             clip.sequence.size()<16 || SamBossSequence::Size(clip.sequence.data())!=clip.sequence.size())return nullptr;
         return &clips.emplace(key,std::move(clip)).first->second;

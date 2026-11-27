@@ -71,6 +71,7 @@ namespace SamConfig
         // INIs list only 19 specials and must not remove it when loading.
         if(SamUltimatePolicy::Moves.size()<=19)SamUltimatePolicy::Moves.resize(20);
         SamUltimatePolicy::Moves[19]=SamUltimatePolicy::LightExtension();
+        SamUltimatePolicy::EnsureLightningSpecials();
         for (int direction = 1; direction <= 4; ++direction)
             for (int* table : {SamDirectionalPolicy::heldLight, SamDirectionalPolicy::heldHeavy,
                 SamDirectionalPolicy::flickLight, SamDirectionalPolicy::flickHeavy})
@@ -93,5 +94,6 @@ namespace SamConfig
                 } catch (...) {}
             }
         }
+        SamUltimatePolicy::EnsureLightningSpecials();
     }
 }

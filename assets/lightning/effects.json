@@ -1,0 +1,64 @@
+{
+  "bank": 72752,
+  "first_charge_id": 950,
+  "first_release_id": 958,
+  "impact_id": 966,
+  "miss_id": 967,
+  "texture_id": 900,
+  "colour": [
+    0.18,
+    1.35,
+    2.8,
+    1.0
+  ],
+  "moves": [
+    {
+      "name": "Chidori",
+      "shape": "thrust",
+      "reach": 4,
+      "life": 28
+    },
+    {
+      "name": "Kirin",
+      "shape": "kirin",
+      "reach": 12,
+      "life": 44
+    },
+    {
+      "name": "Chidori Nagashi",
+      "shape": "radial",
+      "reach": 5,
+      "life": 26
+    },
+    {
+      "name": "Chidori Senbon",
+      "shape": "needles",
+      "reach": 16,
+      "life": 28
+    },
+    {
+      "name": "Double Chidori",
+      "shape": "double",
+      "reach": 4,
+      "life": 28
+    },
+    {
+      "name": "Chidori Sharp Spear",
+      "shape": "spear",
+      "reach": 14,
+      "life": 32
+    },
+    {
+      "name": "Chidori sword wave",
+      "shape": "wave",
+      "reach": 14,
+      "life": 30
+    },
+    {
+      "name": "MGS4 lightning discharge",
+      "shape": "storm",
+      "reach": 8,
+      "life": 30
+    }
+  ]
+}

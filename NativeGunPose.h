@@ -127,6 +127,28 @@ class NativeGunPose
         return PistolIK::Unit(ray) && PistolIK::Unit(forward) && D3DXVec3Dot(&ray,&forward)>.99f;
     }
 public:
+    // Native full-body pistol attacks already animate the wrists. Mount the
+    // weapon to that authored hand without applying the standing aim overlay.
+    bool AttachAuthoredPistol(Pl0000* player,Behavior* gun,const D3DXMATRIX& grip) {
+        auto* wrist=player?player->getPartsPtr(13):nullptr;
+        auto* root=gun?gun->getPartsPtr(0):nullptr;
+        if(!wrist || !root)return false;
+        D3DXMATRIX hand,barrel;std::memcpy(&hand,&wrist->m_LocalMatrix,64);
+        D3DXMatrixMultiply(&barrel,&grip,&hand);
+        D3DXVECTOR3 knuckles(0,0,0);unsigned fingers=0;
+        for(short id:{short(516),short(520),short(524),short(528)})if(auto* finger=player->getPartsPtr(id)){knuckles+=Position(finger);++fingers;}
+        if(fingers==4) {
+            const auto palm=(Position(wrist)+knuckles*.25f)*.5f;
+            const D3DXVECTOR3 contact(PistolHandling::GripX*PistolHandling::ModelScale,
+                PistolHandling::GripY*PistolHandling::ModelScale,PistolHandling::GripZ*PistolHandling::ModelScale);
+            D3DXVECTOR3 offset;D3DXVec3TransformNormal(&offset,&contact,&barrel);
+            barrel._41=palm.x-offset.x;barrel._42=palm.y-offset.y;barrel._43=palm.z-offset.z;
+        }
+        if(!gunPart){poseGun=gun->m_pEntity;gunPart=root;gunMatrix=root->m_LocalMatrix;gunFlags=root->m_PartsFlag.m_Flag;}
+        std::memcpy(&root->m_LocalMatrix,&barrel,64);root->m_PartsFlag.m_Flag|=4;
+        (gun->m_pParent?gun->m_pParent:gun)->updateHierarchicalTransformations();
+        return true;
+    }
     void BeginFrame(bool keepGun=false)
     {
         Entity* actor=poseOwner.getEntity();

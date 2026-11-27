@@ -12,6 +12,8 @@
 #include "WeaponSwitchPolicy.h"
 #include "SaiPullDiagnostics.h"
 #include "MonsoonKickPolicy.h"
+#include "SamUltimatePolicy.h"
+#include "NativeLightningEffects.h"
 
 
 
@@ -146,6 +148,19 @@ static void RenderSamDebug()
         ImGui::Spacing();
 
         // Control Buttons
+        static int lightningPreview=0;
+        const char* lightningNames[]={"Chidori","Kirin","Chidori Nagashi","Chidori Senbon","Double Chidori","Chidori Sharp Spear","Chidori sword wave","MGS4 discharge"};
+        ImGui::Combo("Lightning visual",&lightningPreview,lightningNames,8);
+        ImGui::Text("Native particle spawns: %u accepted / %u rejected",NativeLightningEffects::Get().Accepted(),NativeLightningEffects::Get().Failed());
+        if(ImGui::Button("Preview lightning (no damage)")) {
+            NativeLightningEffects::Get().QueuePreview(unsigned(20+lightningPreview),false);
+            g_guiVisible=false;io.MouseDrawCursor=false;::ShowCursor(FALSE);
+        }
+        ImGui::SameLine();
+        if(ImGui::Button("Preview hand charge")) {
+            NativeLightningEffects::Get().QueuePreview(unsigned(20+lightningPreview),true);
+            g_guiVisible=false;io.MouseDrawCursor=false;::ShowCursor(FALSE);
+        }
         if (ImGui::Button("Stream/Reload Resources", ImVec2(180, 28)))
         {
             gui::RequestResourcesFromGUI();
@@ -221,13 +236,13 @@ static void RenderSamDebug()
         ImGui::TextWrapped("Left: L left evade, H backward evade, LL tackle/smash, LH sonic slash. Right: L right evade, H advancing flurry, LL leap, LH lightning storm.");
         ImGui::TextWrapped("360 stick + Heavy: Judgement Cut. Sprinting uses only native Sam Run + Light / Run + Heavy; added specials are blocked. Press or hold neutral Light through the base finisher to continue 9000 > 9001 > 9002 > 9003. Hold Heavy during a Boss charge to build up; release after the windup or wait for full-charge release. X cycles Raiden specials.");
         ImGui::TextWrapped("F cycles paired grab/smash, charge stab and sweeping finisher. Executions require a living cyborg within 3m and at or below 25% HP. A confirmed parry counter can execute its attacker under the same conditions.");
-        static const char* s_moveNames[] = {
-            "Raiden thunder slice (pl0010 2400)",
-            "Raiden lightning storm (pl0010 3501)",
-            "Raiden lightning draw slash (pl0010 2420 -> 2422)"
-        };
+        ImGui::TextWrapped("Lightning specials: Chidori, Kirin, Nagashi, Senbon, Double Chidori, Sharp Spear, sword wave and MGS4 discharge. Select here, then Trigger Now or X / controller B in combat. Custom lightning particles include hand charge, forked bolts, radial arcs, needles, spear and wave. Restart after installing effect resources.");
         static int s_selectedMove = 0;
-        if (ImGui::Combo("Select Move", &s_selectedMove, s_moveNames, 3))
+        if (ImGui::Combo("Select Move", &s_selectedMove, [](void*,int item,const char** name) {
+            if(item<0 || unsigned(item)>=SamUltimatePolicy::UltimateCount()) return false;
+            *name=SamUltimatePolicy::Moves[SamUltimatePolicy::UltimateIndex(unsigned(item))].name.c_str();
+            return true;
+        }, nullptr, int(SamUltimatePolicy::UltimateCount())))
         {
             gui::SelectUltimate(static_cast<unsigned int>(s_selectedMove));
         }
@@ -236,6 +251,10 @@ static void RenderSamDebug()
         {
             gui::SelectUltimate(static_cast<unsigned int>(s_selectedMove));
             gui::TriggerUltimateNow();
+            // Return gameplay focus before the queued move can start.
+            g_guiVisible=false;
+            io.MouseDrawCursor=false;
+            ::ShowCursor(FALSE);
         }
 
         if (state.roundTripActive)

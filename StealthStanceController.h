@@ -3,6 +3,7 @@
 #include "StealthCqcPolicy.h"
 #include "SamSheathPolicy.h"
 #include "StealthPoseFile.h"
+#include "AnimationArchive.h"
 #include "StealthAdditivePose.h"
 #include "StealthInputPolicy.h"
 #include "StealthMotionPolicy.h"
@@ -101,22 +102,10 @@ class StealthStanceController {
     bool Load() {
         if(attempted)return ready;
         attempted=true;
-        const char* names[]={"crouch_idle.gwm","crouch_walk.gwm","prone_idle.gwm","prone_walk.gwm",
-            "dive_forward.gwm","dive_fall.gwm","roll_left_start.gwm","roll_left.gwm","roll_left_end.gwm",
-            "roll_right_start.gwm","roll_right.gwm","roll_right_end.gwm",
-            "crouch_rifle.gwm","prone_rifle.gwm","crouch_rpg.gwm","standing_grenade.gwm","prone_grenade.gwm",
-            "cqc_miss.gwm","cqc_combo1.gwm","cqc_combo2.gwm","cqc_combo3.gwm","cqc_combo4.gwm",
-            "cqc_grab.gwm","cqc_hold.gwm","cqc_low_grab.gwm","cqc_low_hold.gwm",
-            "cqc_throw_f.gwm","cqc_throw_b.gwm","cqc_throw_l.gwm","cqc_throw_r.gwm","cqc_knife.gwm","cqc_low_knife.gwm","prone_to_crouch.gwm","crouch_grenade.gwm"};
-        auto root=SamConfig::GetIniPath();root.resize(root.find_last_of("\\/")+1);root+="scripts\\StealthAnims\\";
+        const auto& names=AnimationArchiveNames::StealthPoses;
         for(unsigned i=0;i<34;++i) {
-            FILE* file=nullptr;
-            if(fopen_s(&file,(root+names[i]).c_str(),"rb")||!file)return false;
-            fseek(file,0,SEEK_END);long length=ftell(file);rewind(file);
-            if(length<44 || length>16*1024*1024){fclose(file);return false;}
-            std::vector<unsigned char> data(length);
-            const bool ok=fread(data.data(),1,data.size(),file)==data.size();fclose(file);
-            if(!ok || !clips[i].Load(std::move(data)))return false;
+            auto data=AnimationArchive::Read("pl1c00",names[i]);
+            if(!clips[i].Load(std::move(data)))return false;
         }
         ready=true;return true;
     }

@@ -1,5 +1,6 @@
 #pragma once
 #include "SamDirectionalPolicy.h"
+#include "SaiMovesetPolicy.h"
 #include <atomic>
 namespace MonsoonKickPolicy {
     inline std::atomic<const char*> Status{"Ready: Back + Heavy with Sai"};
@@ -29,18 +30,40 @@ namespace MonsoonKickPolicy {
             return FollowUp::None;
         }
     };
+    struct SommersaultBuffer {
+        unsigned ticks=0;
+        void Clear(){ticks=0;}
+        bool Poll(unsigned state,float frame,bool initialized,bool air,
+                  bool heavy,bool light,bool back,bool frozen=false) {
+            if(state!=SaiMovesetPolicy::Sommersault || light){Clear();return false;}
+            if(heavy) {
+                if(!back){Clear();return false;}
+                const float remaining=SaiMovesetPolicy::CancelFrame(state)-frame;
+                ticks=48+(remaining>0?unsigned(remaining)+1:0);
+            }
+            if(frozen || !ticks)return false;
+            if(!air && SaiMovesetPolicy::RecoveryReady(state,initialized,frame)) {
+                Clear();return true;
+            }
+            --ticks;return false;
+        }
+    };
     inline unsigned StartState(unsigned current, unsigned previous, bool initializing, bool sai=false) {
         // Native input selection can enter a sword attack before HandleActions.
-        // Replace only its first update, when this Heavy press began from idle.
+        // Replace only its first update, when this Heavy press began from idle
+        // or an eligible Sai recovery. The caller checks that recovery's frame.
         const bool nativeAttack=sai && current>=0x9C && current<=0xA5;
-        return initializing && previous<=4 && nativeAttack ? previous : current;
+        return initializing && (previous<=4 || (sai && SaiMovesetPolicy::GroundRecovery(previous))) &&
+            nativeAttack ? previous : current;
     }
     inline bool ConfirmedLaunch(int hpBefore, int hp, bool owned, float frame, bool launched) {
         return !launched && owned && hp>0 && hpBefore>hp && frame>=42 && frame<=64;
     }
     inline bool CanStart(unsigned state, bool alive, bool air, bool blade, bool blocked,
-                         bool supportedWeapon, bool heavy, bool light, float x, float y) {
-        return state <= 4 && alive && !air && !blade && !blocked && supportedWeapon &&
+                         bool supportedWeapon, bool heavy, bool light, float x, float y,
+                         bool initialized=false, float frame=0) {
+        const bool ready=state<=4 || SaiMovesetPolicy::RecoveryReady(state,initialized,frame);
+        return ready && alive && !air && !blade && !blocked && supportedWeapon &&
             heavy && !light && SamDirectionalPolicy::Resolve(x,y) == SamDirectionalPolicy::Back;
     }
 }

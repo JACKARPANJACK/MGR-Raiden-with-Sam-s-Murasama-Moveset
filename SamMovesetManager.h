@@ -98,6 +98,7 @@ private:
     bool m_currentAddon = false;
     bool m_rtReleasePending = false;
     float m_stageFrame = 0.0f;
+    float m_stageContactFrame = 8.0f;
     unsigned m_stageLength = 1;
     bool m_slamDone = false, m_lightningHit = false;
     unsigned m_stormLifetime = 0, m_roundTripHits = 0;
@@ -106,6 +107,7 @@ private:
     bool m_xDown = false;
     unsigned m_previousUltimatePad = 0;
     unsigned m_ultimateStage = 0;
+    unsigned m_specialPulse = 0;
     unsigned m_currentUltimate = 0;
     std::map<std::string, std::vector<uint8_t>> m_bossSequences;
     SamLightComboPolicy::Buffer m_lightCombo;
@@ -699,7 +701,8 @@ public:
         {
             if (!m_pStormEsp)
                 m_pStormEsp = new cEspControler();
-            SamElectricCombat::Lightning(player,player->m_pEntity,m_pStormEsp);
+            const unsigned visual=m_currentUltimate==9?27u:m_currentUltimate==13?26u:25u;
+            NativeLightningEffects::Get().Release(player,visual);
             m_electricCombat.Strike(player);
             m_stormActive = true;
             m_stormLifetime = 75;
@@ -708,7 +711,7 @@ public:
             ((int(__cdecl*)(const char*, int))(shared::base + 0xA5E050))("core_se_btl_char_zan", 0);
             if (player->m_pBladeEntity)
                 ((void(__thiscall*)(Entity*, float))(shared::base + 0x1CC40))(player->m_pBladeEntity, 30.0f);
-            Log("[SamMoveset] ULTIMATE thunderstorm active: rain and lightning engaged");
+            Log("[SamMoveset] ULTIMATE lightning mesh active: visual=%u",visual);
         }
         catch (...) {}
     }
@@ -768,6 +771,9 @@ public:
     }
     void ResetUltimate()
     {
+        NativeLightningEffects::Get().Clear();
+        if(LightningSpecialPolicy::Is(m_currentUltimate) && m_activePlayer)
+            m_electricCombat.ReleaseTarget(m_activePlayer->m_pEntity);
         StopAddonCharge();
         m_ultimateQueue.Reset();
         m_pendingAddon = -1;
@@ -823,13 +829,19 @@ public:
 
     void* BossSequence(const char* code, void* sequence, bool raiden = false, bool playable = false)
     {
-        const std::string key=std::string(raiden ? "pl0010:" : playable ? "pl1400:" : "em0020:")+code;
+        const bool special=LightningSpecialPolicy::Is(m_currentUltimate);
+        const std::string key=std::string(raiden ? "pl0010:" : playable ? "pl1400:" : "em0020:")+code+(special?":electric":"");
         auto it = m_bossSequences.find(key);
         if (it != m_bossSequences.end()) return it->second.data();
         auto& resources=SamResourceManager::Instance();
         auto copy = SamBossSequence::Adapt(sequence, raiden ? resources.GetRaidenSequenceSize(sequence) :
             resources.GetBossSequenceSize(sequence), code, raiden, playable);
         if (copy.empty()) return nullptr;
+        if(special) {
+            // Scripted area pulses own damage; remove native collision tracks
+            // from this private sequence copy to prevent duplicate sword hits.
+            SamBossSequence::DisableAttackTracks(copy);
+        }
         auto inserted = m_bossSequences.emplace(key, std::move(copy));
         return inserted.first->second.data();
     }
@@ -846,11 +858,16 @@ public:
         m_stageLength = SamStagePolicy::Length(clip.motion);
         if (!m_stageLength || m_stageLength > 3600) return false;
         m_stageFrame = 0.0f;
+        m_stageContactFrame=SamBossSequence::FirstHitFrame(clip.sequence);
+        m_specialPulse = 0;
         m_slamDone = m_lightningHit = false;
         SamNativeRuntime::Get().ConfigureDamage(player,true,SamBossSequence::HitCount(sequence),raiden);
         const int animation = player->setDirectAnimation(clip.motion, sequence, 0,
             0.05f, 1.0f, 0x8000000, 0.0f, SamBalancePolicy::AttackSpeed);
         if (animation == -1) return false;
+        if(LightningSpecialPolicy::Is(m_currentUltimate) && m_ultimateStage==0)
+            m_electricCombat.SpecialCharge(player,m_currentUltimate);
+        else if(LightningSpecialPolicy::Is(m_currentUltimate))NativeLightningEffects::Get().EndCharge();
         const bool windup=!raiden && SamChargeFxPolicy::Windup(code);
         if(!raiden) {
             SheathController::Instance().SetChargePose(player,windup,chargeRelease);
@@ -891,7 +908,7 @@ public:
             raiden ? "Raiden ultimate: native motion, sequence and attack table" : "directional add-on: player-adapted boss sequence");
         RecordSequenceReplacement(code);
         Log("[SamMoveset] ULTIMATE stage=%s frames=%u boxes=%u name=%s", code,
-            m_stageLength,SamBossSequence::HitCount(sequence),SamUltimatePolicy::Moves[m_currentUltimate].name);
+            m_stageLength,SamBossSequence::HitCount(sequence),SamUltimatePolicy::Moves[m_currentUltimate].name.c_str());
         return true;
     }
 
@@ -1116,6 +1133,12 @@ public:
             m_pendingAddon = -1;
         if (m_bBossEnderActive)
         {
+            if(LightningSpecialPolicy::Is(m_currentUltimate) &&
+                (!focused || g_StaFlags.STA_PAUSE || Trigger::StpFlags.STP_OBJ ||
+                 g_StaFlags.STA_QTE || g_StaFlags.STA_EVENT || g_StaFlags.STA_CODEC || g_StaFlags.STA_SOFT_EVENT)) {
+                Log("[SamMoveset] LIGHTNING cancel move=%u focused=%u pause=%u",m_currentUltimate,unsigned(focused),unsigned(g_StaFlags.STA_PAUSE));
+                FinishUltimate(player); return;
+            }
             if (action != SamUltimatePolicy::Action)
             {
                 ResetUltimate(); // damage/cutscene/other engine transition wins
@@ -1129,6 +1152,17 @@ public:
             m_stageFrame += SamBalancePolicy::AttackSpeed * (std::max)(0.0f,player->getSpeedRate());
             UpdateAddonCharge(player);
             const int animationFrame = int(m_stageFrame);
+            if(LightningSpecialPolicy::Is(m_currentUltimate)) {
+                const auto& move=SamUltimatePolicy::Moves[m_currentUltimate];
+                const bool release=move.windup.empty() || m_ultimateStage>0;
+                const auto spec=LightningSpecialPolicy::Get(m_currentUltimate);
+                if(release) while(m_specialPulse<spec.pulses &&
+                    m_stageFrame>=LightningSpecialPolicy::PulseFrame(spec,m_specialPulse,m_stageLength,m_stageContactFrame)) {
+                    const unsigned hits=m_electricCombat.SpecialPulse(player,m_currentUltimate);
+                    Log("[SamMoveset] LIGHTNING pulse move=%u stage=%u pulse=%u frame=%.1f targets=%u",m_currentUltimate,m_ultimateStage,m_specialPulse,m_stageFrame,hits);
+                    ++m_specialPulse;
+                }
+            }
             if (m_rtReleasePending && m_ultimateStage == 1 && animationFrame >= SamRoundTripPolicy::ReleaseFrame)
                 LaunchRoundTrip(player);
             if (m_currentUltimate == 0 && m_ultimateStage == 1 && !m_rockSpawned && animationFrame > 22)
@@ -1140,9 +1174,10 @@ public:
             if ((m_currentUltimate == 10 || m_currentUltimate == 11) && m_ultimateStage == 1 &&
                 !m_slamDone && animationFrame >= 20)
             { m_slamDone = true; Log("[SamMoveset] Grab impact target=%s",m_electricCombat.Slam(player)?"hit":"miss"); }
-            if (IsThunderMove(m_currentUltimate) && m_ultimateStage == 1 && !m_lightningHit && animationFrame >= 20)
+            const bool thunderRelease=SamUltimatePolicy::Moves[m_currentUltimate].windup.empty() || m_ultimateStage>0;
+            if (!LightningSpecialPolicy::Is(m_currentUltimate) && IsThunderMove(m_currentUltimate) && thunderRelease && !m_lightningHit && animationFrame >= 8)
             { m_lightningHit=true; m_electricCombat.Strike(player,true); }
-            if (IsThunderMove(m_currentUltimate) && m_ultimateStage == 1 && !m_stormActive)
+            if (!LightningSpecialPolicy::Is(m_currentUltimate) && IsThunderMove(m_currentUltimate) && thunderRelease && !m_stormActive)
             {
                 StartThunderstorm(player);
             }
@@ -1179,6 +1214,9 @@ public:
             Log("[SamMoveset] ULTIMATE queued by X/controller B: %s", NextUltimateName());
         }
         if (m_roundTripActive || (!m_ultimateQueue.pending && m_pendingAddon < 0)) return;
+        // GUI requests wait for gameplay focus instead of starting in the menu
+        // and immediately cancelling on the following tick.
+        if(!focused || g_StaFlags.STA_PAUSE) return;
         const bool finished = g_GameFunctionManager.IsAnimationEnded(player, 0);
         const bool restartedLight=m_pendingAddon==SamLightComboPolicy::MoveIndex && m_lightCombo.pending &&
             !std::strcmp(m_nativeCombatClip,"2000");

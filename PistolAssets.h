@@ -70,13 +70,13 @@ inline std::vector<unsigned char> Member(const Bank& bank,const char* name) {
 }
 inline bool LoadAnimations() {
     static bool validated=false;if(validated)return true;
-    if(!LoadFile(animations,"GameData\\wp\\pistol_anims.dat","pistol_ready.gwm"))return false;
-    for(const char* name:{"pistol_ready.gwm","pistol_crouch.gwm","pistol_prone.gwm"}) {
+    if(!LoadFile(animations,"mods\\RaidenMoveset\\wp\\wp2062.dat","wp2062_2f40.gwm"))return false;
+    for(const char* name:{"wp2062_2f40.gwm","wp2062_2f43.gwm","wp2062_2f44.gwm"}) {
         auto bytes=Member(animations,name);if(bytes.size()<44)return false;
         std::memcpy(bytes.data(),"STW1",4);StealthPoseFile::Clip clip;
         if(!clip.Load(std::move(bytes)))return false;
     }
-    const auto grip=Member(animations,"pistol_grip.bin");if(grip.size()!=64)return false;
+    const auto grip=Member(animations,"wp2062_grip.bin");if(grip.size()!=64)return false;
     for(unsigned i=0;i<16;++i) {float v;std::memcpy(&v,grip.data()+i*4,4);if(!std::isfinite(v))return false;}
     validated=true;return true;
 }
@@ -86,11 +86,11 @@ inline bool Load(unsigned kind) {
     auto& bank=banks[kind];
     if(bank.paired)return true;
     char relative[64],model[32];
-    std::snprintf(relative,sizeof(relative),"GameData\\wp\\wp%04x.dat",PistolPolicy::Get(kind).object&0xffff);
+    std::snprintf(relative,sizeof(relative),"mods\\RaidenMoveset\\wp\\wp%04x.dat",PistolPolicy::Get(kind).object&0xffff);
     std::snprintf(model,sizeof(model),"wp%04x.wmb",PistolPolicy::Get(kind).object&0xffff);
     if(!LoadFile(bank,relative,model))return false;
     std::string root=SamConfig::GetIniPath();root.resize(root.find_last_of("\\/")+1);
-    std::snprintf(relative,sizeof(relative),"GameData\\wp\\wp%04x.dtt",PistolPolicy::Get(kind).object&0xffff);
+    std::snprintf(relative,sizeof(relative),"mods\\RaidenMoveset\\wp\\wp%04x.dtt",PistolPolicy::Get(kind).object&0xffff);
     FILE* f=nullptr;if(fopen_s(&f,(root+relative).c_str(),"rb") || !f)return false;
     fseek(f,0,SEEK_END);const long size=ftell(f);rewind(f);
     if(size<32 || size>32*1024*1024) {fclose(f);return false;}

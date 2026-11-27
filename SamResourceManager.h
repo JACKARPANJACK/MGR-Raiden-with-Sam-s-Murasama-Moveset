@@ -10,6 +10,9 @@
 #include "SamVoiceSequence.h"
 #include "SamLightComboPolicy.h"
 #include "SamStagePolicy.h"
+#include "AnimationArchive.h"
+#include "NativeLightningBank.h"
+#include "NativeLightningEffects.h"
 #include <map>
 #include <string>
 #include <windows.h>
@@ -53,19 +56,11 @@ private:
         if(!SamLightComboPolicy::ExtensionCode(code))return {};
         auto it=m_lightClips.find(code);
         if(it==m_lightClips.end()) {
-            char exe[MAX_PATH]{};GetModuleFileNameA(nullptr,exe,MAX_PATH);
-            char* slash=std::strrchr(exe,'\\');if(!slash)return {};*slash=0;
-            const std::string stem=std::string(exe)+"\\scripts\\SamTemplateAnims\\light_"+code;
+            const std::string stem=std::string("pl1c12_")+code;
             auto read=[&](const char* suffix) {
-                FILE* file=nullptr;fopen_s(&file,(stem+suffix).c_str(),"rb");
-                if(!file)return std::vector<uint8_t>{};
-                std::fseek(file,0,SEEK_END);const long size=std::ftell(file);std::rewind(file);
-                if(size<=0 || size>4*1024*1024){std::fclose(file);return std::vector<uint8_t>{};}
-                std::vector<uint8_t> bytes(size);
-                const bool ok=std::fread(bytes.data(),1,bytes.size(),file)==bytes.size();std::fclose(file);
-                return ok ? bytes : std::vector<uint8_t>{};
+                return AnimationArchive::Read("pl1c10",stem+suffix);
             };
-            LightClip clip{read(".mot"),read("_seq.bxm")};
+            LightClip clip{read(".mot"),read("_0_seq.bxm")};
             if(clip.motion.size()<12 || !SamStagePolicy::Length(clip.motion.data()) ||
                 clip.sequence.size()<16 || SamBossSequence::Size(clip.sequence.data())!=clip.sequence.size())return {};
             it=m_lightClips.emplace(code,std::move(clip)).first;
@@ -394,6 +389,8 @@ public:
     bool ExplosivesReady() const { return m_grenadeBank; }
     void SceneReleased()
     {
+        NativeLightningEffects::Get().Shutdown();
+        NativeLightningBank::Get().SceneReleased();
         using ReleaseBank=void(__cdecl*)(unsigned,Hw::cFmerge*);
         auto release=reinterpret_cast<ReleaseBank>(shared::base+0xA00D60);
         if (m_samBank) release(0x11400,&m_pl1400Fmerge);

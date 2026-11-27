@@ -25,6 +25,43 @@ namespace SamBossSequence
         if (!nodes || nodes > 16384 || pairs > 32768 || strings > 65000) return 0;
         return 16 + nodes * 8 + pairs * 4 + strings;
     }
+    // Call only on validated Adapt output, never untrusted archive bytes.
+    inline float FirstHitFrame(const void* data)
+    {
+        if(!Size(data))return 4;
+        const auto* p=static_cast<const uint8_t*>(data);
+        const unsigned nodes=U16(p+8),pairs=U16(p+10),ps=16+nodes*8,ts=ps+pairs*4;
+        float earliest=3600;
+        for(unsigned i=0;i<nodes;++i) {
+            const auto* n=p+16+i*8;const unsigned ix=U16(n+6);
+            if(ix>=pairs || std::strcmp(reinterpret_cast<const char*>(p+ts+U16(p+ps+ix*4)),"AttackTrack"))continue;
+            for(unsigned c=U16(n+2);c<U16(n+2)+U16(n) && c<nodes;++c) {
+                const auto* child=p+16+c*8;const unsigned ci=U16(child+6),attrs=U16(child+4);
+                bool damaging=false;float time=-1;
+                for(unsigned a=1;a<=attrs && ci+a<pairs;++a) {
+                    const auto* e=p+ps+(ci+a)*4;
+                    const char* name=reinterpret_cast<const char*>(p+ts+U16(e));
+                    const char* value=reinterpret_cast<const char*>(p+ts+U16(e+2));
+                    if(!std::strcmp(name,"No"))damaging=std::strtoul(value,nullptr,10)>0;
+                    if(!std::strcmp(name,"StartTime"))time=std::strtof(value,nullptr)*60;
+                }
+                if(damaging && time>=0 && time<earliest)earliest=time;
+            }
+        }
+        return earliest<3600?(earliest<1?1:earliest):4;
+    }
+    inline void DisableAttackTracks(std::vector<uint8_t>& sequence)
+    {
+        if(sequence.empty() || Size(sequence.data())!=sequence.size()) return;
+        const unsigned nodes=U16(sequence.data()+8);
+        const unsigned ps=16+nodes*8,ts=ps+U16(sequence.data()+10)*4;
+        for(unsigned i=0;i<nodes;++i) {
+            auto* n=sequence.data()+16+i*8;
+            const unsigned ix=U16(n+6);
+            const char* tag=reinterpret_cast<const char*>(sequence.data()+ts+U16(sequence.data()+ps+ix*4));
+            if(!std::strcmp(tag,"AttackTrack")) W16(n,0);
+        }
+    }
     inline unsigned AttackNumber(const char* code, unsigned bossNumber)
     {
         if (!code) return 12;
